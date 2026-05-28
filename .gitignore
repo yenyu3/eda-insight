@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+*.db
+
+# Node
+node_modules/
+dist/
+
+# EDA 工具輸出
+backend/uploads/
+*.vcd
+*.out
+
+# OS
+.DS_Store
+
+# Local assistant context
+CLAUDE.md
