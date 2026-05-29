@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { useSSEStream } from '../hooks/useSSEStream'
+import AIFormattedText from './AIFormattedText'
 
 interface AIInsightPanelProps {
   runId: string | undefined
@@ -19,7 +20,7 @@ export default function AIInsightPanel({ runId, enabled = true }: AIInsightPanel
 
   return (
     <div className="ai-box">
-      {text || <span className="text-black/40">Waiting for AI insight...</span>}
+      <AIFormattedText text={text} />
       {!done && text && (
         <motion.span
           className="ml-1 inline-block h-4 w-0.5 align-middle bg-[var(--accent-color)]"

@@ -10,6 +10,7 @@ import WaveformChart from '../components/WaveformChart'
 import DependencyGraph from '../components/DependencyGraph'
 import LogViewer from '../components/LogViewer'
 import LogicFlowchart from '../components/LogicFlowchart'
+import AIFormattedText from '../components/AIFormattedText'
 import type { AnalysisResult, StageLog, StageStatus } from '../types'
 
 type ViewMode = 'tech' | 'ai'
@@ -222,15 +223,23 @@ export default function Analysis() {
           {result?.bottleneck_analysis && (
             <section className="surface-card panel">
               <h2 className="panel-title">Bottleneck Analysis</h2>
-              <div className="ai-box min-h-0">
-                <p className="mb-3 text-sm text-black/60">
-                  <span className="font-medium text-[var(--heading-color)]">Nodes:</span>{' '}
-                  {result.bottleneck_analysis.bottlenecks.length
-                    ? result.bottleneck_analysis.bottlenecks.join(', ')
-                    : 'None'}
-                </p>
-                <p className="mb-3 text-sm text-black/60">{result.bottleneck_analysis.impact}</p>
-                <p className="text-sm text-black/60">{result.bottleneck_analysis.suggestions}</p>
+              <div className="ai-box min-h-0 space-y-4">
+                <div className="ai-section">
+                  <h3>Nodes</h3>
+                  <p>
+                    {result.bottleneck_analysis.bottlenecks.length
+                      ? result.bottleneck_analysis.bottlenecks.join(', ')
+                      : 'None'}
+                  </p>
+                </div>
+                <div className="ai-section">
+                  <h3>Impact</h3>
+                  <AIFormattedText text={result.bottleneck_analysis.impact || 'No impact details available.'} />
+                </div>
+                <div className="ai-section">
+                  <h3>Suggestions</h3>
+                  <AIFormattedText text={result.bottleneck_analysis.suggestions || 'No suggestions available.'} />
+                </div>
               </div>
             </section>
           )}
