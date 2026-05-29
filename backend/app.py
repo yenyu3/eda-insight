@@ -103,13 +103,19 @@ def upload():
 
     # 解析所有 .v 合併內容以取得完整 module 結構
     all_content = ""
+    design_content = ""
     for fname in os.listdir(run_dir):
         if fname.endswith(".v"):
             with open(os.path.join(run_dir, fname), "r", encoding="utf-8", errors="replace") as fp:
-                all_content += fp.read() + "\n"
+                content = fp.read()
+                all_content += content + "\n"
+                if not _is_testbench_filename(fname):
+                    design_content += content + "\n"
+    if not design_content:
+        design_content = main_content
 
     parser_result = parse_verilog(all_content)
-    db_manager.create_run(run_id, main_filename, main_content)
+    db_manager.create_run_with_design(run_id, main_filename, main_content, design_content)
     db_manager.update_run_field(run_id, "parser_result", parser_result)
 
     return jsonify({
@@ -301,7 +307,7 @@ def get_result(run_id: str):
         return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
 
     flowchart = None
-    verilog_content = run.get("verilog_content")
+    verilog_content = run.get("design_content") or run.get("verilog_content")
     if verilog_content:
         try:
             flowchart = extract_flowchart(verilog_content)

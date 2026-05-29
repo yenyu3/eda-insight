@@ -12,11 +12,35 @@ import json
 # ─── 公開 API ────────────────────────────────────────────────────────────────
 
 def extract_flowchart(verilog_content: str) -> dict:
+    ctx = _new_context()
     code = _strip_comments(verilog_content)
+    always_blocks = _find_always_blocks(code, ctx)
+    assign_blocks = _find_assign_stmts(code)
+    state_diagram = _build_state_diagram(always_blocks)
     return {
-        "always_blocks": _find_always_blocks(code),
-        "assign_blocks": _find_assign_stmts(code),
+        "always_blocks": always_blocks,
+        "assign_blocks": assign_blocks,
+        "state_diagram": state_diagram,
+        "summary": _summarize_flowchart(always_blocks, assign_blocks),
+        "confidence": "Summarized" if ctx["truncated"] else "Complete",
+        "truncated": ctx["truncated"],
+        "truncation_reasons": sorted(ctx["truncation_reasons"]),
+        "hidden_count": ctx["hidden_count"],
     }
+
+
+def _new_context() -> dict:
+    return {
+        "truncated": False,
+        "truncation_reasons": set(),
+        "hidden_count": 0,
+    }
+
+
+def _mark_truncated(ctx: dict, reason: str, hidden_count: int = 0) -> None:
+    ctx["truncated"] = True
+    ctx["truncation_reasons"].add(reason)
+    ctx["hidden_count"] += max(0, hidden_count)
 
 
 # ─── 前置處理 ─────────────────────────────────────────────────────────────────
@@ -79,14 +103,21 @@ def _unwrap_begin_end(body: str) -> str:
 
 # ─── always block 尋找 ────────────────────────────────────────────────────────
 
-def _find_always_blocks(code: str) -> list[dict]:
+def _find_always_blocks(code: str, ctx: dict) -> list[dict]:
     results = []
-    trigger_pattern = re.compile(r'\balways\s*@\s*\(([^)]*)\)\s*', re.DOTALL)
+    trigger_pattern = re.compile(
+        r'\balways(?:_(ff|comb|latch))?\s*(?:@\s*\(([^)]*)\))?\s*',
+        re.IGNORECASE | re.DOTALL,
+    )
+    matches = list(trigger_pattern.finditer(code))
+    if len(matches) > 5:
+        _mark_truncated(ctx, "always_block_limit", len(matches) - 5)
 
-    for block_idx, m in enumerate(trigger_pattern.finditer(code)):
+    for block_idx, m in enumerate(matches):
         if block_idx >= 5:
             break
-        trigger_raw = m.group(1).strip()
+        always_kind = (m.group(1) or "").lower()
+        trigger_raw = (m.group(2) or "").strip()
         rest = code[m.end():].lstrip()
 
         if re.match(r'^begin\b', rest, re.IGNORECASE):
@@ -97,27 +128,55 @@ def _find_always_blocks(code: str) -> list[dict]:
                 continue
             body = rest[:sem + 1]
 
-        trigger, trigger_type = _parse_trigger(trigger_raw)
+        trigger, trigger_type = _parse_trigger(trigger_raw, always_kind)
         start_id = f"ab_{block_idx}_start"
         counter = [0]
-        nodes, edges, entry_id = _parse_body(body, block_idx, counter)
+        block_start = _line_number_at(code, m.start())
+        block_end = block_start + body.count("\n")
+        nodes, edges, entry_id = _parse_body(body, block_idx, counter, ctx=ctx)
 
-        trigger_node = {"id": start_id, "type": "trigger", "label": trigger}
+        trigger_node = {
+            "id": start_id,
+            "type": "trigger",
+            "label": trigger,
+            "display_label": _friendly_trigger(trigger, trigger_type),
+            "detail": trigger,
+            "source_line_start": block_start,
+            "source_line_end": block_start,
+        }
         nodes = [trigger_node] + nodes
         if entry_id:
-            edges = [{"id": f"ab_{block_idx}_e_start", "source": start_id, "target": entry_id}] + edges
+            edges = [{"id": f"ab_{block_idx}_e_start", "source": start_id, "target": entry_id, "kind": "sequence"}] + edges
+
+        assigned_signals = _collect_node_values(nodes, "assigned_signals")
+        condition_signals = _collect_node_values(nodes, "condition_signals")
+        block_role = _infer_block_role(nodes, assigned_signals, trigger_type)
+        title = _block_title(block_idx, trigger, block_role)
 
         results.append({
             "id": f"ab_{block_idx}",
+            "title": title,
             "trigger": trigger,
             "trigger_type": trigger_type,
+            "block_role": block_role,
+            "summary": _summarize_block(trigger, trigger_type, block_role, assigned_signals, condition_signals, nodes),
+            "assigned_signals": assigned_signals,
+            "condition_signals": condition_signals,
+            "source_line_start": block_start,
+            "source_line_end": block_end,
             "nodes": nodes,
             "edges": edges,
         })
     return results
 
 
-def _parse_trigger(trigger_raw: str) -> tuple[str, str]:
+def _parse_trigger(trigger_raw: str, always_kind: str = "") -> tuple[str, str]:
+    if always_kind == "comb":
+        return "always_comb", "combinational"
+    if always_kind == "latch":
+        return "always_latch", "combinational"
+    if always_kind == "ff":
+        return trigger_raw or "always_ff", "sequential"
     t = trigger_raw.strip()
     if re.search(r'\b(posedge|negedge)\b', t, re.IGNORECASE):
         return t, "sequential"
@@ -126,47 +185,75 @@ def _parse_trigger(trigger_raw: str) -> tuple[str, str]:
 
 # ─── body 解析（遞迴） ────────────────────────────────────────────────────────
 
-def _parse_body(body: str, block_idx: int, counter: list, depth: int = 0) -> tuple[list, list, str]:
+def _parse_body(body: str, block_idx: int, counter: list, depth: int = 0, ctx: dict | None = None) -> tuple[list, list, str]:
+    ctx = ctx or _new_context()
     body = _unwrap_begin_end(body)
     stripped = body.strip()
 
     if depth > 4:
+        _mark_truncated(ctx, "nesting_depth_limit", 1)
         nid = _next_id(block_idx, counter, "p")
-        return [{"id": nid, "type": "process", "label": f"[...] {_truncate(stripped, 48)}"}], [], nid
+        return [_process_node(nid, f"[...] {_truncate(stripped, 48)}", kind="summary")], [], nid
 
     # Case 1: if/else-if/else chain
-    if_result = _try_parse_if(stripped, block_idx, counter, depth)
+    if_result = _try_parse_if(stripped, block_idx, counter, depth, ctx)
     if if_result is not None:
         return if_result
 
     # Case 2: case/casez/casex
-    case_result = _try_parse_case(stripped, block_idx, counter, depth)
+    case_result = _try_parse_case(stripped, block_idx, counter, depth, ctx)
     if case_result is not None:
         return case_result
 
     # Case 3: loop
     if re.match(r'\b(for|while|repeat|forever)\b', stripped, re.IGNORECASE):
+        _mark_truncated(ctx, "loop_summary", 1)
         nid = _next_id(block_idx, counter, "p")
-        return [{"id": nid, "type": "process", "label": f"[loop: {_truncate(stripped, 46)}]"}], [], nid
+        return [_process_node(nid, f"[loop: {_truncate(stripped, 46)}]", kind="summary")], [], nid
 
     # Case 4: 多個頂層 statement → 合併為一個 process node（修正：只顯示第一個的問題）
     stmts = _split_top_level_stmts(stripped)
     if len(stmts) > 1:
         if any(_is_structural_stmt(stmt) for stmt in stmts):
-            return _parse_stmt_sequence(stmts, block_idx, counter, depth)
+            return _parse_stmt_sequence(stmts, block_idx, counter, depth, ctx)
         nid = _next_id(block_idx, counter, "p")
-        return [{"id": nid, "type": "process", "label": _format_multi_stmt(stmts)}], [], nid
+        return [_process_node(nid, _format_multi_stmt(stmts), assigned_signals=_assigned_from_stmts(stmts))], [], nid
 
     # Case 5: 單一 assignment
-    assign_match = re.match(r'(\w+)\s*(?:<=|=)\s*(.+?);', stripped, re.DOTALL)
+    assign_match = re.match(r'([A-Za-z_][\w$]*(?:\s*\[[^\]]+\])?)\s*(<=|=)\s*(.+?);', stripped, re.DOTALL)
     if assign_match:
         nid = _next_id(block_idx, counter, "p")
-        rhs = _truncate(assign_match.group(2).strip(), 32)
-        return [{"id": nid, "type": "process", "label": f"{assign_match.group(1)} ← {rhs}"}], [], nid
+        lhs = assign_match.group(1).strip()
+        op = assign_match.group(2)
+        rhs = _truncate(assign_match.group(3).strip(), 32)
+        return [_process_node(nid, f"{lhs} {op} {rhs}", assigned_signals=[_base_signal(lhs)])], [], nid
 
     # Fallback
     nid = _next_id(block_idx, counter, "p")
-    return [{"id": nid, "type": "process", "label": _truncate(stripped, 48)}], [], nid
+    return [_process_node(nid, _truncate(stripped, 48))], [], nid
+
+
+def _decision_node(nid: str, label: str) -> dict:
+    return {
+        "id": nid,
+        "type": "decision",
+        "label": label,
+        "display_label": _friendly_condition(label),
+        "detail": label,
+        "condition_signals": _signals_from_expr(label),
+    }
+
+
+def _process_node(nid: str, label: str, assigned_signals: list[str] | None = None, kind: str = "process") -> dict:
+    return {
+        "id": nid,
+        "type": "process",
+        "label": label,
+        "display_label": _friendly_process(label),
+        "detail": label,
+        "kind": kind,
+        "assigned_signals": sorted(set(assigned_signals or [])),
+    }
 
 
 def _split_top_level_stmts(body: str) -> list[str]:
@@ -228,7 +315,7 @@ def _is_structural_stmt(stmt: str) -> bool:
     return re.match(r'\s*(if|casez|casex|case|for|while|repeat|forever)\b', stmt, re.IGNORECASE) is not None
 
 
-def _parse_stmt_sequence(stmts: list[str], block_idx: int, counter: list, depth: int):
+def _parse_stmt_sequence(stmts: list[str], block_idx: int, counter: list, depth: int, ctx: dict):
     """
     Parse a top-level statement sequence as a flow.
 
@@ -244,7 +331,7 @@ def _parse_stmt_sequence(stmts: list[str], block_idx: int, counter: list, depth:
 
     for idx, chunk in enumerate(chunks):
         chunk_body = '\n'.join(chunk)
-        chunk_nodes, chunk_edges, chunk_entry = _parse_body(chunk_body, block_idx, counter, depth)
+        chunk_nodes, chunk_edges, chunk_entry = _parse_body(chunk_body, block_idx, counter, depth, ctx)
         if not chunk_entry:
             continue
 
@@ -258,6 +345,7 @@ def _parse_stmt_sequence(stmts: list[str], block_idx: int, counter: list, depth:
                 "id": f"e_seq_{block_idx}_{idx}_{source}_{chunk_entry}",
                 "source": source,
                 "target": chunk_entry,
+                "kind": "sequence",
             })
 
         previous_exits = _terminal_node_ids(chunk_nodes, chunk_edges)
@@ -294,9 +382,9 @@ def _format_multi_stmt(stmts: list[str]) -> str:
     """將多個 statement 格式化為緊湊多行 label（最多顯示 4 行）。"""
     lines = []
     for stmt in stmts:
-        m = re.match(r'(\w+)\s*(?:<=|=)\s*(.+?);', stmt.strip(), re.DOTALL)
+        m = re.match(r'([A-Za-z_][\w$]*(?:\s*\[[^\]]+\])?)\s*(<=|=)\s*(.+?);', stmt.strip(), re.DOTALL)
         if m:
-            lines.append(f"{m.group(1)} ← {_truncate(m.group(2).strip(), 20)}")
+            lines.append(f"{m.group(1).strip()} {m.group(2)} {_truncate(m.group(3).strip(), 20)}")
         elif stmt.strip():
             lines.append(_truncate(stmt.strip(), 24))
     display = lines[:4]
@@ -305,9 +393,18 @@ def _format_multi_stmt(stmts: list[str]) -> str:
     return '\n'.join(display)
 
 
+def _assigned_from_stmts(stmts: list[str]) -> list[str]:
+    signals = []
+    for stmt in stmts:
+        m = re.match(r'\s*([A-Za-z_][\w$]*(?:\s*\[[^\]]+\])?)\s*(?:<=|=)\s*', stmt, re.DOTALL)
+        if m:
+            signals.append(_base_signal(m.group(1)))
+    return sorted(set(signals))
+
+
 # ─── if 解析 ─────────────────────────────────────────────────────────────────
 
-def _try_parse_if(body: str, block_idx: int, counter: list, depth: int):
+def _try_parse_if(body: str, block_idx: int, counter: list, depth: int, ctx: dict):
     stripped = body.strip()
     m = re.match(r'if\s*\(', stripped, re.IGNORECASE)
     if not m:
@@ -325,25 +422,25 @@ def _try_parse_if(body: str, block_idx: int, counter: list, depth: int):
         else_body = after_then_stripped[4:].strip()
 
     cond_id = _next_id(block_idx, counter, "c")
-    nodes = [{"id": cond_id, "type": "decision", "label": cond.strip()}]
+    nodes = [_decision_node(cond_id, cond.strip())]
     edges = []
 
-    yes_nodes, yes_edges, yes_entry = _parse_body(then_body, block_idx, counter, depth + 1)
+    yes_nodes, yes_edges, yes_entry = _parse_body(then_body, block_idx, counter, depth + 1, ctx)
     nodes += yes_nodes
     edges += yes_edges
     if yes_entry:
-        edges.append({"id": f"e_{cond_id}_yes", "source": cond_id, "target": yes_entry, "label": "YES"})
+        edges.append({"id": f"e_{cond_id}_yes", "source": cond_id, "target": yes_entry, "label": "YES", "kind": "branch"})
 
     if else_body:
-        no_nodes, no_edges, no_entry = _parse_body(else_body, block_idx, counter, depth + 1)
+        no_nodes, no_edges, no_entry = _parse_body(else_body, block_idx, counter, depth + 1, ctx)
         nodes += no_nodes
         edges += no_edges
         if no_entry:
-            edges.append({"id": f"e_{cond_id}_no", "source": cond_id, "target": no_entry, "label": "NO"})
+            edges.append({"id": f"e_{cond_id}_no", "source": cond_id, "target": no_entry, "label": "NO", "kind": "branch"})
     else:
         hold_id = _next_id(block_idx, counter, "p")
-        nodes.append({"id": hold_id, "type": "process", "label": "(no change)"})
-        edges.append({"id": f"e_{cond_id}_no", "source": cond_id, "target": hold_id, "label": "NO"})
+        nodes.append(_process_node(hold_id, "(no change)"))
+        edges.append({"id": f"e_{cond_id}_no", "source": cond_id, "target": hold_id, "label": "NO", "kind": "branch"})
 
     return nodes, edges, cond_id
 
@@ -369,7 +466,7 @@ def _extract_paren_cond(s: str, open_pos: int) -> tuple[str, int]:
 
 # ─── case 解析 ────────────────────────────────────────────────────────────────
 
-def _try_parse_case(body: str, block_idx: int, counter: list, depth: int):
+def _try_parse_case(body: str, block_idx: int, counter: list, depth: int, ctx: dict):
     stripped = body.strip()
     m = re.match(r'case[zx]?\s*\((.+?)\)\s*', stripped, re.IGNORECASE | re.DOTALL)
     if not m:
@@ -385,7 +482,7 @@ def _try_parse_case(body: str, block_idx: int, counter: list, depth: int):
     arms = _parse_case_arms_robust(case_body)
 
     case_id = _next_id(block_idx, counter, "c")
-    nodes = [{"id": case_id, "type": "decision", "label": f"case({_truncate(expr, 20)})"}]
+    nodes = [_decision_node(case_id, f"case({_truncate(expr, 20)})")]
     edges = []
 
     displayed = 0
@@ -393,7 +490,7 @@ def _try_parse_case(body: str, block_idx: int, counter: list, depth: int):
         arm_val, arm_stmt = arm_val.strip(), arm_stmt.strip()
         if not arm_val or not arm_stmt:
             continue
-        arm_nodes, arm_edges, arm_entry = _parse_body(arm_stmt, block_idx, counter, depth + 1)
+        arm_nodes, arm_edges, arm_entry = _parse_body(arm_stmt, block_idx, counter, depth + 1, ctx)
         nodes += arm_nodes
         edges += arm_edges
         if arm_entry:
@@ -402,13 +499,15 @@ def _try_parse_case(body: str, block_idx: int, counter: list, depth: int):
                 "source": case_id,
                 "target": arm_entry,
                 "label": _truncate(arm_val, 12),
+                "kind": "branch",
             })
         displayed += 1
 
     if len(arms) > 4:
+        _mark_truncated(ctx, "case_arm_limit", len(arms) - 4)
         extra_id = _next_id(block_idx, counter, "p")
-        nodes.append({"id": extra_id, "type": "process", "label": f"({len(arms) - 4} more cases...)"})
-        edges.append({"id": f"e_{case_id}_more", "source": case_id, "target": extra_id, "label": "..."})
+        nodes.append(_process_node(extra_id, f"({len(arms) - 4} more cases...)", kind="summary"))
+        edges.append({"id": f"e_{case_id}_more", "source": case_id, "target": extra_id, "label": "...", "kind": "summary"})
 
     return nodes, edges, case_id
 
@@ -507,6 +606,193 @@ def _next_id(block_idx: int, counter: list, prefix: str) -> str:
 def _truncate(s: str, max_len: int) -> str:
     s = ' '.join(s.split())
     return s if len(s) <= max_len else s[:max_len - 3] + '...'
+
+
+def _line_number_at(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _base_signal(signal: str) -> str:
+    return re.sub(r'\s*\[.*?\]\s*$', '', signal.strip())
+
+
+def _signals_from_expr(expr: str) -> list[str]:
+    keywords = {
+        "if", "else", "case", "default", "begin", "end", "posedge", "negedge",
+        "and", "or", "not",
+    }
+    signals = []
+    for token in re.findall(r'\b[A-Za-z_][\w$]*\b', expr):
+        if token.lower() in keywords:
+            continue
+        if re.fullmatch(r'[bBdDhHoO][0-9a-fA-F_xXzZ]+', token):
+            continue
+        signals.append(token)
+    return sorted(set(signals))
+
+
+def _collect_node_values(nodes: list[dict], key: str) -> list[str]:
+    values = []
+    for node in nodes:
+        values.extend(node.get(key) or [])
+    return sorted(set(values))
+
+
+def _friendly_trigger(trigger: str, trigger_type: str) -> str:
+    if trigger_type == "sequential":
+        return "Clocked logic"
+    if trigger in {"*", "always_comb"}:
+        return "Combinational logic"
+    return "Logic trigger"
+
+
+def _friendly_condition(label: str) -> str:
+    raw = label.strip()
+    if raw.startswith("case("):
+        inner = raw[5:-1] if raw.endswith(")") else raw[5:]
+        if inner == "state":
+            return "Current FSM state"
+        return f"Select by {inner}"
+    lower = raw.lower()
+    if lower in {"rst", "reset", "reset_n", "rst_n"}:
+        return "Reset active?"
+    if raw.endswith("_valid"):
+        return f"{raw} asserted?"
+    if raw.endswith("_tick"):
+        return f"{raw} occurred?"
+    return raw if raw.endswith("?") else f"{raw}?"
+
+
+def _friendly_process(label: str) -> str:
+    if label == "(no change)":
+        return "No state change"
+    if label.startswith("[...]"):
+        return "Summarized logic"
+    if label.startswith("[loop:"):
+        return "Loop summarized"
+    return label
+
+
+def _infer_block_role(nodes: list[dict], assigned_signals: list[str], trigger_type: str) -> str:
+    decision_labels = [node.get("label", "") for node in nodes if node.get("type") == "decision"]
+    if "state" in assigned_signals or any(label.startswith("case(state") for label in decision_labels):
+        return "fsm"
+    if trigger_type == "combinational" and assigned_signals:
+        return "output_decode"
+    if trigger_type == "sequential":
+        return "register_update"
+    return "logic"
+
+
+def _block_title(block_idx: int, trigger: str, role: str) -> str:
+    role_labels = {
+        "fsm": "FSM / state logic",
+        "output_decode": "Output decode",
+        "register_update": "Register update",
+        "logic": "Logic block",
+    }
+    return f"{role_labels.get(role, 'Logic block')} - {trigger if trigger != '*' else 'always @(*)'}"
+
+
+def _summarize_block(
+    trigger: str,
+    trigger_type: str,
+    role: str,
+    assigned_signals: list[str],
+    condition_signals: list[str],
+    nodes: list[dict],
+) -> str:
+    updates = ", ".join(assigned_signals[:4]) if assigned_signals else "no obvious signal"
+    controls = ", ".join(condition_signals[:4]) if condition_signals else "no explicit condition"
+    if role == "fsm":
+        states = _state_labels(nodes)
+        state_text = f" States include {', '.join(states[:5])}." if states else ""
+        return f"This state logic updates {updates} and is controlled by {controls}.{state_text}"
+    if trigger_type == "sequential":
+        return f"This clocked block updates {updates} and is controlled by {controls}."
+    return f"This combinational block updates {updates} and is controlled by {controls}."
+
+
+def _summarize_flowchart(always_blocks: list[dict], assign_blocks: list[dict]) -> str:
+    parts = []
+    if always_blocks:
+        roles = {}
+        for block in always_blocks:
+            roles[block.get("block_role", "logic")] = roles.get(block.get("block_role", "logic"), 0) + 1
+        role_names = []
+        for role, count in roles.items():
+            name = role.replace("_", " ")
+            role_names.append(f"{count} {name} block" + ("" if count == 1 else "s"))
+        parts.append(", ".join(role_names))
+    if assign_blocks:
+        count = len(assign_blocks)
+        parts.append(f"{count} continuous assign" + ("" if count == 1 else "s"))
+    return "Detected " + ("; ".join(parts) if parts else "no procedural or assign logic.")
+
+
+def _state_labels(nodes: list[dict]) -> list[str]:
+    labels = []
+    for node in nodes:
+        label = node.get("label", "")
+        m = re.match(r'state\s*(?:<=|=)\s*([A-Za-z_][\w$]*)', label)
+        if m:
+            labels.append(m.group(1))
+    return sorted(set(labels))
+
+
+def _build_state_diagram(always_blocks: list[dict]) -> dict | None:
+    states = set()
+    transitions = []
+    for block in always_blocks:
+        if block.get("block_role") != "fsm":
+            continue
+        node_by_id = {node["id"]: node for node in block.get("nodes", [])}
+        adjacency: dict[str, list[str]] = {}
+        for edge in block.get("edges", []):
+            adjacency.setdefault(edge["source"], []).append(edge["target"])
+
+        state_branch_edges = [
+            edge for edge in block.get("edges", [])
+            if edge.get("kind") == "branch" and edge.get("label") not in {"YES", "NO", "..."}
+        ]
+        for edge in state_branch_edges:
+            src_state = edge.get("label")
+            if not src_state:
+                continue
+            states.add(src_state)
+            for target_id in _reachable_state_update_nodes(edge["target"], node_by_id, adjacency):
+                label = node_by_id[target_id].get("label", "")
+                m = re.match(r'state\s*(?:<=|=)\s*([A-Za-z_][\w$]*)', label)
+                if not m:
+                    continue
+                dst = m.group(1)
+                states.add(dst)
+                transitions.append({"source": src_state, "target": dst, "label": label})
+    if not states and not transitions:
+        return None
+    return {
+        "states": sorted(states),
+        "transitions": transitions,
+        "summary": f"Detected {len(states)} state(s) and {len(transitions)} transition update(s).",
+    }
+
+
+def _reachable_state_update_nodes(start_id: str, node_by_id: dict, adjacency: dict[str, list[str]]) -> list[str]:
+    found = []
+    stack = [start_id]
+    seen = set()
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        node = node_by_id.get(node_id, {})
+        label = node.get("label", "")
+        if re.match(r'state\s*(?:<=|=)\s*[A-Za-z_][\w$]*', label):
+            found.append(node_id)
+            continue
+        stack.extend(adjacency.get(node_id, []))
+    return found
 
 
 # ─── 測試入口 ─────────────────────────────────────────────────────────────────

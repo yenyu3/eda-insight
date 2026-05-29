@@ -39,6 +39,7 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 status TEXT DEFAULT 'pending',
                 verilog_content TEXT,
+                design_content TEXT,
                 parser_result TEXT,
                 workflow_plan TEXT,
                 sim_result TEXT,
@@ -65,6 +66,7 @@ def init_db() -> None:
         """)
         _ensure_column(conn, "runs", "risk_scores", "TEXT")
         _ensure_column(conn, "runs", "bottleneck_analysis", "TEXT")
+        _ensure_column(conn, "runs", "design_content", "TEXT")
     conn.close()
 
 
@@ -75,6 +77,17 @@ def create_run(run_id: str, filename: str, verilog_content: str) -> None:
         conn.execute(
             "INSERT INTO runs (run_id, filename, verilog_content, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
             (run_id, filename, verilog_content, taipei_now()),
+        )
+    conn.close()
+
+
+def create_run_with_design(run_id: str, filename: str, verilog_content: str, design_content: str) -> None:
+    """Create a run and persist the combined non-testbench design source."""
+    conn = get_connection()
+    with conn:
+        conn.execute(
+            "INSERT INTO runs (run_id, filename, verilog_content, design_content, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+            (run_id, filename, verilog_content, design_content, taipei_now()),
         )
     conn.close()
 
@@ -91,7 +104,7 @@ def update_run_field(run_id: str, field: str, value) -> None:
     """更新 runs 表中單一欄位（用於儲存各 stage 的 JSON 結果）。"""
     allowed = {
         "parser_result", "workflow_plan", "sim_result", "synthesis_result",
-        "dependency_graph", "ai_summary", "risk_scores", "bottleneck_analysis", "ppa_cell_count",
+        "dependency_graph", "ai_summary", "risk_scores", "bottleneck_analysis", "design_content", "ppa_cell_count",
         "ppa_critical_path_ns", "ppa_slack_ns", "status",
     }
     if field not in allowed:
