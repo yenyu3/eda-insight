@@ -18,6 +18,8 @@ backend/uploads/
 .DS_Store
 
 # Local assistant context
+*.md
+!README.md
 CLAUDE.md
 SETUP.md
 UI_SPEC.md
