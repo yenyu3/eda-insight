@@ -108,6 +108,13 @@ export interface FlowNode {
   id: string
   type: FlowNodeType
   label: string
+  display_label?: string
+  detail?: string
+  kind?: 'process' | 'summary'
+  assigned_signals?: string[]
+  condition_signals?: string[]
+  source_line_start?: number | null
+  source_line_end?: number | null
 }
 
 export interface FlowEdge {
@@ -115,12 +122,20 @@ export interface FlowEdge {
   source: string
   target: string
   label?: string
+  kind?: 'sequence' | 'branch' | 'summary'
 }
 
 export interface AlwaysBlock {
   id: string
+  title?: string
   trigger: string
   trigger_type: 'sequential' | 'combinational'
+  block_role?: 'fsm' | 'output_decode' | 'register_update' | 'logic' | string
+  summary?: string
+  assigned_signals?: string[]
+  condition_signals?: string[]
+  source_line_start?: number | null
+  source_line_end?: number | null
   nodes: FlowNode[]
   edges: FlowEdge[]
 }
@@ -134,6 +149,16 @@ export interface AssignBlock {
 export interface FlowchartData {
   always_blocks: AlwaysBlock[]
   assign_blocks: AssignBlock[]
+  state_diagram?: {
+    states: string[]
+    transitions: Array<{ source: string; target: string; label?: string }>
+    summary?: string
+  } | null
+  summary?: string
+  confidence?: 'Complete' | 'Summarized' | 'Partial parse' | string
+  truncated?: boolean
+  truncation_reasons?: string[]
+  hidden_count?: number
   error?: boolean
   message?: string
 }
