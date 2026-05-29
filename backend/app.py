@@ -42,6 +42,25 @@ def get_ai_engine() -> AIEngine:
     return _ai_engine
 
 
+@app.route("/", methods=["GET"])
+def health_check():
+    """Simple backend landing endpoint for browser/manual checks."""
+    return jsonify({
+        "service": "EDA Insight Backend",
+        "status": "ok",
+        "api_base": "/api",
+        "endpoints": [
+            "/api/history",
+            "/api/upload",
+            "/api/run",
+            "/api/status/<run_id>",
+            "/api/result/<run_id>",
+            "/api/stream/<run_id>",
+            "/api/compare",
+        ],
+    })
+
+
 # ------------------------------------------------------------------
 # POST /api/upload
 # ------------------------------------------------------------------
@@ -69,12 +88,13 @@ def upload():
     os.makedirs(run_dir, exist_ok=True)
 
     # 儲存所有上傳的檔案
-    main_filename = files[0].filename
+    main_file = next((f for f in files if not _is_testbench_filename(f.filename)), files[0])
+    main_filename = main_file.filename
     main_content = ""
     for f in files:
         save_path = os.path.join(run_dir, f.filename)
         f.save(save_path)
-        if f == files[0]:
+        if f == main_file:
             with open(save_path, "r", encoding="utf-8", errors="replace") as fp:
                 main_content = fp.read()
 
@@ -303,6 +323,16 @@ def _compute_diff(a: dict, b: dict) -> dict:
         better = (delta < 0) if key != "slack_ns" else (delta > 0)
         diff[key] = {"delta": round(delta, 3), "pct": pct, "better": better}
     return diff
+
+
+def _is_testbench_filename(filename: str) -> bool:
+    name = filename.lower()
+    return (
+        name.endswith("_tb.v")
+        or name.startswith("tb_")
+        or "testbench" in name
+        or name.endswith("_test.v")
+    )
 
 
 # ------------------------------------------------------------------

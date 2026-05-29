@@ -9,15 +9,14 @@ MVP 版本：固定依序執行 lint → simulate → synthesize pipeline。
 """
 
 import os
+import shutil
 import subprocess
 import time
-import uuid
-import re
 
-from db_manager import update_run_field, update_run_status, upsert_stage_log
+from db_manager import update_run_field, update_run_status, upsert_stage_log, get_stage_logs
 from verilog_parser import parse_verilog
 from vcd_parser import parse_vcd
-from report_parser import parse_synthesis_report
+from report_parser import parse_synthesis_report, parse_synthesis_json
 from dependency_analyzer import build_dag
 
 # 固定 pipeline 步驟順序
@@ -72,12 +71,12 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
     # Stage 5: Synthesize（yosys，不阻斷其他 stage）
     if "synthesize" in pipeline:
         try:
-            _stage_synthesize(run_id, verilog_path, run_dir)
+            _stage_synthesize(run_id, verilog_path, run_dir, parser_result)
         except Exception as e:
             upsert_stage_log(run_id, "synthesis", "error", f"{type(e).__name__}: {e}")
 
     # 若所有 stage 沒有 error 則標記 done，否則 error
-    stage_logs = {s["stage"]: s["status"] for s in __import__("db_manager").get_stage_logs(run_id)}
+    stage_logs = {s["stage"]: s["status"] for s in get_stage_logs(run_id)}
     has_error = any(v == "error" for v in stage_logs.values())
     update_run_status(run_id, "error" if has_error else "done")
 
@@ -132,17 +131,21 @@ def _stage_simulate(run_id: str, verilog_path: str, run_dir: str) -> str | None:
     t0 = time.time()
     upsert_stage_log(run_id, "simulation", "running", "")
 
-    sim_out = os.path.join(run_dir, "sim.out")
-    # VCD 路徑由 testbench 的 $dumpfile 決定，先預設找 run_dir 下的任何 .vcd
+    # Use relative paths throughout and run with cwd=run_dir to avoid
+    # Windows Unicode/backslash issues in iverilog/vvp command arguments.
+    sim_out_rel = "sim.out"
     vcd_path = None
 
-    # 找出所有 .v 檔案（包含 testbench）
-    verilog_files = _find_verilog_files(run_dir)
+    # 找出所有 .v 檔案（包含 testbench），使用相對路徑
+    verilog_filenames = sorted(f for f in os.listdir(run_dir) if f.endswith(".v"))
 
     # 編譯
+    iverilog_cmd = _resolve_tool("iverilog")
     compile_result = subprocess.run(
-        ["iverilog", "-o", sim_out, "-g2012"] + verilog_files,
+        [iverilog_cmd, "-o", sim_out_rel, "-g2012"] + verilog_filenames,
         capture_output=True, text=True, timeout=60,
+        cwd=run_dir,
+        env=_tool_env(iverilog_cmd),
     )
     if compile_result.returncode != 0:
         duration = int((time.time() - t0) * 1000)
@@ -151,10 +154,12 @@ def _stage_simulate(run_id: str, verilog_path: str, run_dir: str) -> str | None:
         return None
 
     # 執行模擬
+    vvp_cmd = _resolve_tool("vvp")
     sim_result = subprocess.run(
-        ["vvp", sim_out],
+        [vvp_cmd, sim_out_rel],
         capture_output=True, text=True, timeout=60,
         cwd=run_dir,
+        env=_tool_env(vvp_cmd),
     )
     duration = int((time.time() - t0) * 1000)
 
@@ -180,7 +185,7 @@ def _stage_simulate(run_id: str, verilog_path: str, run_dir: str) -> str | None:
     return vcd_path
 
 
-def _stage_synthesize(run_id: str, verilog_path: str, run_dir: str) -> None:
+def _stage_synthesize(run_id: str, verilog_path: str, run_dir: str, parser_result: dict | None = None) -> None:
     """
     執行 Yosys 合成，取得 PPA 指標。
     使用 synth 指令搭配 stat 取得 cell count 等資訊。
@@ -188,12 +193,32 @@ def _stage_synthesize(run_id: str, verilog_path: str, run_dir: str) -> None:
     t0 = time.time()
     upsert_stage_log(run_id, "synthesis", "running", "")
 
-    synth_json = os.path.join(run_dir, "synth.json")
-    yosys_script = f"read_verilog {verilog_path}; synth; write_json {synth_json}; stat"
+    # Use relative paths and cwd=run_dir to avoid Windows Unicode/backslash issues
+    # in the Yosys -p script string.
+    synth_json_rel = "synth.json"
+    synth_json = os.path.join(run_dir, synth_json_rel)
 
+    # Only synthesize non-testbench design files; testbench 'initial' blocks
+    # are not synthesizable and will cause Yosys errors.
+    design_files = sorted(
+        f for f in os.listdir(run_dir)
+        if f.endswith(".v") and not _is_testbench_file(f)
+    )
+    if not design_files:
+        # Fallback: if every file looks like a testbench, use the primary file anyway
+        design_files = [os.path.basename(verilog_path)]
+
+    top_module = _select_synthesis_top(parser_result, design_files)
+    read_cmds = "; ".join(f"read_verilog {f}" for f in design_files)
+    synth_cmd = f"synth -top {top_module}" if top_module else "synth"
+    yosys_script = f"{read_cmds}; {synth_cmd}; write_json {synth_json_rel}; stat"
+
+    yosys_cmd = _resolve_tool("yosys")
     result = subprocess.run(
-        ["yosys", "-p", yosys_script],
+        [yosys_cmd, "-p", yosys_script],
         capture_output=True, text=True, timeout=120,
+        cwd=run_dir,
+        env=_tool_env(yosys_cmd),
     )
     duration = int((time.time() - t0) * 1000)
 
@@ -202,7 +227,11 @@ def _stage_synthesize(run_id: str, verilog_path: str, run_dir: str) -> None:
         update_run_field(run_id, "synthesis_result", {"error": result.stderr})
         return
 
-    synth_data = parse_synthesis_report(result.stdout)
+    # 優先從 JSON 解析（不受 Yosys stdout/stderr 分流影響）
+    if os.path.exists(synth_json):
+        synth_data = parse_synthesis_json(synth_json)
+    else:
+        synth_data = parse_synthesis_report(result.stdout + "\n" + result.stderr)
     update_run_field(run_id, "synthesis_result", synth_data)
 
     # 同步更新 PPA 快速查詢欄位
@@ -234,9 +263,96 @@ def _stage_dependency(run_id: str, parser_result: dict) -> dict:
 # ------------------------------------------------------------------
 
 def _find_verilog_files(run_dir: str) -> list[str]:
-    """找出指定目錄下的所有 .v 檔案。"""
+    """找出指定目錄下的所有 .v 檔案（絕對路徑）。"""
     files = []
     for fname in os.listdir(run_dir):
         if fname.endswith(".v"):
             files.append(os.path.join(run_dir, fname))
     return files
+
+
+def _resolve_tool(tool_name: str) -> str:
+    """Resolve EDA tool executables even when Flask starts with a minimal PATH."""
+    found = shutil.which(tool_name)
+    if found:
+        return found
+
+    exe_name = f"{tool_name}.exe" if os.name == "nt" else tool_name
+    candidates = []
+    if os.name == "nt":
+        candidates.extend([
+            os.path.join("C:\\", "oss-cad-suite", "bin", exe_name),
+            os.path.join("C:\\", "ProgramData", "chocolatey", "bin", exe_name),
+        ])
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    raise FileNotFoundError(
+        f"{tool_name} not found. Install it or add its bin directory to PATH."
+    )
+
+
+def _tool_env(tool_path: str) -> dict[str, str]:
+    env = os.environ.copy()
+    tool_dir = os.path.dirname(tool_path)
+    suite_root = os.path.dirname(tool_dir)
+    suite_lib = os.path.join(suite_root, "lib")
+    current_path = env.get("PATH", "")
+    path_parts = [p for p in current_path.split(os.pathsep) if p]
+    prepend = [
+        p for p in (tool_dir, suite_lib)
+        if p and os.path.exists(p) and p not in path_parts
+    ]
+    if prepend:
+        env["PATH"] = os.pathsep.join(prepend + ([current_path] if current_path else []))
+    return env
+
+
+def _select_synthesis_top(parser_result: dict | None, design_files: list[str]) -> str | None:
+    """Choose a non-testbench root module for Yosys synthesis."""
+    if not parser_result:
+        return None
+
+    design_stems = {os.path.splitext(f)[0] for f in design_files}
+    modules = [
+        m for m in parser_result.get("modules", [])
+        if not _is_testbench_file(f"{m.get('name', '')}.v")
+    ]
+    if not modules:
+        return None
+
+    module_names = {m["name"] for m in modules}
+    instantiated = {
+        inst
+        for m in modules
+        for inst in m.get("instantiations", [])
+        if inst in module_names
+    }
+    roots = [m["name"] for m in modules if m["name"] not in instantiated]
+
+    stem_roots = [name for name in roots if name in design_stems]
+    if len(stem_roots) == 1:
+        return stem_roots[0]
+    if len(roots) == 1:
+        return roots[0]
+
+    primary_matches = [m["name"] for m in modules if m["name"] in design_stems]
+    if primary_matches:
+        return primary_matches[0]
+    return modules[0]["name"]
+
+
+def _is_testbench_file(filename: str) -> bool:
+    """
+    依檔名慣例判斷是否為 testbench 檔案。
+    常見命名：foo_tb.v / tb_foo.v / foo_testbench.v / foo_test.v
+    """
+    name = filename.lower()
+    return (
+        name.endswith("_tb.v")
+        or name.startswith("tb_")
+        or "testbench" in name
+        or name.endswith("_test.v")
+    )

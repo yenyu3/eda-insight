@@ -7,7 +7,55 @@ report_parser.py — Yosys 合成報告解析模組
 
 import re
 import json
+import os
 from typing import Optional
+
+
+def parse_synthesis_json(json_path: str) -> dict:
+    """
+    直接從 Yosys write_json 產生的 JSON 檔解析 PPA 指標。
+    比解析文字輸出更可靠，不受 stdout/stderr 分流影響。
+    """
+    try:
+        with open(json_path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    except Exception:
+        return _empty_result()
+
+    cell_count = 0
+    wire_count = 0
+    flip_flop_count = 0
+
+    dff_prefixes = ("$_DFF_", "$_SDFF_", "$_SDFFE_", "$_DFFE_")
+
+    for mod_data in data.get("modules", {}).values():
+        cells = mod_data.get("cells", {})
+        cell_count += len(cells)
+        for cell_data in cells.values():
+            t = cell_data.get("type", "")
+            if any(t.startswith(p) for p in dff_prefixes):
+                flip_flop_count += 1
+        wire_count += len(mod_data.get("netnames", {}))
+
+    return {
+        "cell_count": cell_count,
+        "wire_count": wire_count,
+        "flip_flop_count": flip_flop_count,
+        "critical_path_ns": None,
+        "slack_ns": None,
+        "area_estimate": _estimate_area(cell_count),
+    }
+
+
+def _empty_result() -> dict:
+    return {
+        "cell_count": 0,
+        "wire_count": 0,
+        "flip_flop_count": 0,
+        "critical_path_ns": None,
+        "slack_ns": None,
+        "area_estimate": "unknown",
+    }
 
 
 def parse_synthesis_report(yosys_output: str) -> dict:
