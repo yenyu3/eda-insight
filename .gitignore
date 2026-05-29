@@ -20,3 +20,4 @@ backend/uploads/
 # Local assistant context
 CLAUDE.md
 SETUP.md
+UI_SPEC.md

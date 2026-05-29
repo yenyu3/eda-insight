@@ -11,6 +11,7 @@ import uuid
 import json
 import threading
 import shutil
+import time
 from pathlib import Path
 
 # load_dotenv 必須在 custom module import 之前，確保 USE_MOCK_AI 等環境變數已就緒
@@ -133,6 +134,7 @@ def run():
     """
     body = request.get_json(silent=True) or {}
     run_id = body.get("run_id")
+    goals = body.get("goals")
     if not run_id:
         return jsonify({"error": "缺少 run_id", "code": "MISSING_RUN_ID"}), 400
 
@@ -140,12 +142,19 @@ def run():
     if not run_record:
         return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
 
+    if run_record.get("status") == "running":
+        return jsonify({"run_id": run_id, "status": "already_running"}), 202
+
     run_dir = os.path.join(UPLOAD_DIR, run_id)
     verilog_path = os.path.join(run_dir, run_record["filename"])
+    if not os.path.exists(verilog_path):
+        return jsonify({"error": "uploaded Verilog file not found", "code": "SOURCE_NOT_FOUND"}), 404
 
+    db_manager.update_run_status(run_id, "running")
     t = threading.Thread(
         target=run_pipeline,
-        args=(run_id, verilog_path, run_record["verilog_content"]),
+        args=(run_id, verilog_path, run_record["verilog_content"], goals),
+        name=f"eda-run-{run_id[:8]}",
         daemon=True,
     )
     t.start()
@@ -172,7 +181,7 @@ def get_status(run_id: str):
     stage_logs = db_manager.get_stage_logs(run_id)
     stage_map = {s["stage"]: s for s in stage_logs}
 
-    all_stages = ["verilog_parse", "lint", "simulation", "synthesis", "dep_analysis", "ai_report"]
+    all_stages = ["verilog_parse", "ai_plan", "lint", "simulation", "synthesis", "dep_analysis", "ai_report"]
     stages = []
     for name in all_stages:
         entry = stage_map.get(name, {})
@@ -184,7 +193,7 @@ def get_status(run_id: str):
 
     return jsonify({
         "run_id": run_id,
-        "overall": run["status"],
+        "overall": run.get("status") or "pending",
         "stages": stages,
     })
 
@@ -205,14 +214,32 @@ def stream(run_id: str):
 
     def generate():
         try:
+            for _ in range(120):
+                latest = db_manager.get_run(run_id)
+                if not latest:
+                    yield _sse({"type": "error", "content": "run_id not found"})
+                    return
+
+                summary = latest.get("ai_summary")
+                if summary:
+                    yield from _stream_text(summary)
+                    yield _sse({"type": "done"})
+                    return
+
+                if latest.get("status") in {"done", "error"}:
+                    break
+
+                yield ": keep-alive\n\n"
+                time.sleep(1)
+
+            latest = db_manager.get_run(run_id) or run
+            parser_result = latest.get("parser_result") or {}
             engine = get_ai_engine()
-            parser_result = run.get("parser_result") or {}
             for chunk in engine.verilog_insight(parser_result):
-                data = json.dumps({"type": "text", "content": chunk}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                yield _sse({"type": "text", "content": chunk})
+            yield _sse({"type": "done"})
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            yield _sse({"type": "error", "content": str(e)})
 
     return Response(
         stream_with_context(generate()),
@@ -222,6 +249,16 @@ def stream(run_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _stream_text(text: str, chunk_size: int = 80):
+    for i in range(0, len(text), chunk_size):
+        yield _sse({"type": "text", "content": text[i:i + chunk_size]})
+        time.sleep(0.02)
 
 
 # ------------------------------------------------------------------
@@ -241,13 +278,27 @@ def get_result(run_id: str):
         "run_id": run_id,
         "filename": run["filename"],
         "parser_result": run.get("parser_result"),
+        "workflow_plan": run.get("workflow_plan"),
         "waveform": run.get("sim_result"),
         "synthesis": run.get("synthesis_result"),
         "dependency_graph": run.get("dependency_graph"),
         "ai_summary": run.get("ai_summary"),
-        "risk_scores": None,  # Phase 2 填入 ai_engine.risk_analyzer() 結果
+        "risk_scores": run.get("risk_scores"),
+        "bottleneck_analysis": run.get("bottleneck_analysis"),
         "lint_issues": (run.get("parser_result") or {}).get("lint_issues", []),
     })
+
+
+# ------------------------------------------------------------------
+# GET /api/logs/<run_id>
+# ------------------------------------------------------------------
+
+@app.route("/api/logs/<run_id>", methods=["GET"])
+def get_logs(run_id: str):
+    run = db_manager.get_run(run_id)
+    if not run:
+        return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
+    return jsonify({"run_id": run_id, "logs": db_manager.get_stage_logs(run_id)})
 
 
 # ------------------------------------------------------------------
@@ -290,11 +341,20 @@ def compare():
 
     def extract_ppa(run: dict) -> dict:
         synth = run.get("synthesis_result") or {}
+        parser_result = run.get("parser_result") or {}
         return {
+            "run_id": run["run_id"],
             "filename": run["filename"],
+            "created_at": run.get("created_at"),
+            "status": run.get("status"),
+            "sim_passed": _run_sim_passed(run),
+            "warning_count": len(parser_result.get("lint_issues") or []),
             "cell_count": synth.get("cell_count"),
+            "wire_count": synth.get("wire_count"),
+            "flip_flop_count": synth.get("flip_flop_count"),
             "critical_path_ns": synth.get("critical_path_ns"),
             "slack_ns": synth.get("slack_ns"),
+            "synthesis": synth or None,
         }
 
     ver_a = extract_ppa(run_a)
@@ -305,24 +365,79 @@ def compare():
         "version_a": ver_a,
         "version_b": ver_b,
         "diff": diff,
-        "ai_tradeoff": None,  # Phase 2 填入 AI 分析
+        "complexity_scores": _complexity_scores(ver_a, ver_b),
+        "recommended": _recommend_version(ver_a, ver_b),
+        "ai_tradeoff": _compare_tradeoff(ver_a, ver_b),
     })
 
 
 def _compute_diff(a: dict, b: dict) -> dict:
     """計算兩個版本 PPA 指標的差異百分比與改善方向。"""
     diff = {}
-    for key in ("cell_count", "critical_path_ns", "slack_ns"):
+    for key in ("cell_count", "flip_flop_count", "wire_count", "critical_path_ns", "slack_ns"):
         va, vb = a.get(key), b.get(key)
         if va is None or vb is None:
-            diff[key] = {"delta": None, "pct": None, "better": None}
+            diff[key] = None
             continue
         delta = vb - va
         pct = round((delta / va) * 100, 1) if va != 0 else None
         # cell_count 和 critical_path_ns 越小越好；slack_ns 越大越好
         better = (delta < 0) if key != "slack_ns" else (delta > 0)
         diff[key] = {"delta": round(delta, 3), "pct": pct, "better": better}
+    diff["simulation"] = _simulation_diff(a, b)
     return diff
+
+
+def _complexity_scores(a: dict, b: dict) -> dict:
+    ca = a.get("cell_count") or 0
+    cb = b.get("cell_count") or 0
+    max_cells = max(ca, cb)
+    if max_cells <= 0:
+        return {"a": 0, "b": 0}
+    return {
+        "a": round((ca / max_cells) * 10, 1),
+        "b": round((cb / max_cells) * 10, 1),
+    }
+
+
+def _recommend_version(a: dict, b: dict) -> str | None:
+    a_ok = a.get("sim_passed") is not False
+    b_ok = b.get("sim_passed") is not False
+    if a_ok != b_ok:
+        return "a" if a_ok else "b"
+
+    ca = a.get("cell_count")
+    cb = b.get("cell_count")
+    if ca is not None and cb is not None and ca != cb:
+        return "a" if ca < cb else "b"
+    return None
+
+
+def _compare_tradeoff(a: dict, b: dict) -> str:
+    rec = _recommend_version(a, b)
+    if rec == "a":
+        return f"{a['filename']} is the leaner choice for this comparison based on available correctness and cell-count data."
+    if rec == "b":
+        return f"{b['filename']} is the leaner choice for this comparison based on available correctness and cell-count data."
+    return "The two runs are close on the available metrics. Review function, warnings, and waveform behavior before choosing one."
+
+
+def _simulation_diff(a: dict, b: dict) -> dict | None:
+    va, vb = a.get("sim_passed"), b.get("sim_passed")
+    if va is None or vb is None:
+        return None
+    return {"delta": 0 if va == vb else 1, "pct": None, "better": vb and not va}
+
+
+def _run_sim_passed(run: dict) -> bool | None:
+    sim = run.get("sim_result") or {}
+    if not sim:
+        return None
+    if isinstance(sim, dict) and "error" in sim:
+        return False
+    if run.get("status") in {"done", "error"}:
+        return True
+    return None
 
 
 def _is_testbench_filename(filename: str) -> bool:
@@ -341,5 +456,5 @@ def _is_testbench_filename(filename: str) -> bool:
 
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    port = int(os.environ.get("FLASK_PORT", "5000"))
+    port = int(os.environ.get("FLASK_PORT", "5050"))
     app.run(debug=debug, host="0.0.0.0", port=port)

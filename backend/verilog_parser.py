@@ -74,39 +74,6 @@ def _extract_modules(code: str) -> list[dict]:
     return modules
 
 
-def _parse_ports_legacy(port_list_raw: str, body: str, has_port_list: bool = True) -> list[dict]:
-    """
-    解析 port 宣告，支援兩種風格：
-    - ANSI style（port 方向直接寫在 module(...)）
-    - Non-ANSI style（port 方向另外在 body 中宣告）
-    """
-    ports = []
-    seen = set()
-
-    # ANSI style：input/output/inout 直接在 port list 裡
-    # (?:reg|wire|logic)? 處理 Verilog/SV 所有 port 型別修飾詞，避免把 wire/logic 誤抓成 port name
-    ansi_pattern = re.compile(
-        r'\b(input|output|inout)\s+(?:(?:reg|wire|logic)\s+)?(?:\[(\d+):(\d+)\]\s*)?(\w+)', re.IGNORECASE
-    )
-    for m in ansi_pattern.finditer(port_list_raw):
-        direction, high, low, pname = m.group(1), m.group(2), m.group(3), m.group(4)
-        width = (int(high) - int(low) + 1) if high is not None else 1
-        if pname not in seen:
-            ports.append({"name": pname, "direction": direction.lower(), "width": width})
-            seen.add(pname)
-
-    # Non-ANSI style fallback：從 body 補充
-    if not ports:
-        for m in ansi_pattern.finditer(body):
-            direction, high, low, pname = m.group(1), m.group(2), m.group(3), m.group(4)
-            width = (int(high) - int(low) + 1) if high is not None else 1
-            if pname not in seen:
-                ports.append({"name": pname, "direction": direction.lower(), "width": width})
-                seen.add(pname)
-
-    return ports
-
-
 def _extract_signals(port_list_raw: str, body: str) -> list[str]:
     """
     萃取所有 wire/reg 訊號名稱，來源包含：
@@ -144,31 +111,6 @@ def _detect_logic_type(body: str) -> str:
     if has_sequential:
         return "sequential"
     return "combinational"
-
-
-def _extract_instantiations_legacy(body: str, current_module: str) -> list[str]:
-    """
-    找出子模組例化（module instantiation）的模組名稱。
-    排除關鍵字（always, assign, if, else, begin, end 等）以避免誤判。
-    """
-    keywords = {
-        "module", "endmodule", "input", "output", "inout", "wire", "reg",
-        "always", "assign", "initial", "begin", "end", "if", "else", "case",
-        "endcase", "casez", "casex", "for", "while", "parameter", "localparam",
-        "posedge", "negedge", "integer", "generate", "endgenerate",
-        "task", "endtask", "function", "endfunction", "automatic",
-        "fork", "join", "disable", "force", "release", "event",
-        "time", "realtime", "defparam", "repeat", "forever",
-        "supply0", "supply1", "tri", "signed", "unsigned",
-    }
-    insts = []
-    # 格式：模組名 實例名 (...)
-    pattern = re.compile(r'\b(\w+)\s+(\w+)\s*\(', re.MULTILINE)
-    for m in pattern.finditer(body):
-        module_name = m.group(1)
-        if module_name.lower() not in keywords and module_name != current_module:
-            insts.append(module_name)
-    return list(dict.fromkeys(insts))
 
 
 def _parse_ports(port_list_raw: str, body: str, has_port_list: bool = True) -> list[dict]:

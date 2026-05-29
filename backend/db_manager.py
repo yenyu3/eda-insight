@@ -45,6 +45,8 @@ def init_db() -> None:
                 synthesis_result TEXT,
                 dependency_graph TEXT,
                 ai_summary TEXT,
+                risk_scores TEXT,
+                bottleneck_analysis TEXT,
                 ppa_cell_count INTEGER,
                 ppa_critical_path_ns REAL,
                 ppa_slack_ns REAL
@@ -61,6 +63,8 @@ def init_db() -> None:
                 FOREIGN KEY (run_id) REFERENCES runs(run_id)
             );
         """)
+        _ensure_column(conn, "runs", "risk_scores", "TEXT")
+        _ensure_column(conn, "runs", "bottleneck_analysis", "TEXT")
     conn.close()
 
 
@@ -87,7 +91,7 @@ def update_run_field(run_id: str, field: str, value) -> None:
     """更新 runs 表中單一欄位（用於儲存各 stage 的 JSON 結果）。"""
     allowed = {
         "parser_result", "workflow_plan", "sim_result", "synthesis_result",
-        "dependency_graph", "ai_summary", "ppa_cell_count",
+        "dependency_graph", "ai_summary", "risk_scores", "bottleneck_analysis", "ppa_cell_count",
         "ppa_critical_path_ns", "ppa_slack_ns", "status",
     }
     if field not in allowed:
@@ -107,7 +111,7 @@ def get_run(run_id: str) -> dict | None:
     if row is None:
         return None
     result = dict(row)
-    for field in ("parser_result", "workflow_plan", "sim_result", "synthesis_result", "dependency_graph"):
+    for field in ("parser_result", "workflow_plan", "sim_result", "synthesis_result", "dependency_graph", "risk_scores", "bottleneck_analysis"):
         if result.get(field):
             try:
                 result[field] = json.loads(result[field])
@@ -120,11 +124,21 @@ def get_all_runs() -> list[dict]:
     """取得所有執行紀錄，依建立時間倒序排列，供 History 頁面使用。"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT run_id, filename, created_at, status, ppa_cell_count, ppa_critical_path_ns, ppa_slack_ns "
+        "SELECT run_id, filename, created_at, status, sim_result, parser_result, ppa_cell_count, ppa_critical_path_ns, ppa_slack_ns "
         "FROM runs ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    runs = []
+    for row in rows:
+        run = dict(row)
+        sim_result = _loads_json(run.pop("sim_result", None)) or {}
+        parser_result = _loads_json(run.pop("parser_result", None)) or {}
+        lint_issues = parser_result.get("lint_issues") or []
+        run["cell_count"] = run.get("ppa_cell_count")
+        run["warning_count"] = len(lint_issues)
+        run["sim_passed"] = _sim_passed(sim_result, run.get("status"))
+        runs.append(run)
+    return runs
 
 
 def upsert_stage_log(run_id: str, stage: str, status: str, log_output: str, duration_ms: int | None = None) -> None:
@@ -151,8 +165,36 @@ def get_stage_logs(run_id: str) -> list[dict]:
     """取得指定 run 的所有 stage logs，依建立時間排序。"""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT stage, status, duration_ms FROM stage_logs WHERE run_id = ? ORDER BY created_at",
+        "SELECT stage, status, log_output, duration_ms FROM stage_logs WHERE run_id = ? ORDER BY created_at",
         (run_id,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _loads_json(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _sim_passed(sim_result: dict, status: str | None) -> bool | None:
+    if not sim_result:
+        return None
+    if "error" in sim_result:
+        return False
+    if status in {"done", "error"}:
+        return True
+    return None
