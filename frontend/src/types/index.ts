@@ -102,6 +102,42 @@ export interface BottleneckAnalysis {
   suggestions: string
 }
 
+export type FlowNodeType = 'trigger' | 'decision' | 'process'
+
+export interface FlowNode {
+  id: string
+  type: FlowNodeType
+  label: string
+}
+
+export interface FlowEdge {
+  id: string
+  source: string
+  target: string
+  label?: string
+}
+
+export interface AlwaysBlock {
+  id: string
+  trigger: string
+  trigger_type: 'sequential' | 'combinational'
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+}
+
+export interface AssignBlock {
+  id: string
+  output: string
+  expression: string
+}
+
+export interface FlowchartData {
+  always_blocks: AlwaysBlock[]
+  assign_blocks: AssignBlock[]
+  error?: boolean
+  message?: string
+}
+
 export interface AnalysisResult {
   run_id: string
   filename: string
@@ -114,6 +150,7 @@ export interface AnalysisResult {
   risk_scores: RiskScores | null
   bottleneck_analysis: BottleneckAnalysis | null
   lint_issues: LintIssue[]
+  flowchart: FlowchartData | null
 }
 
 export interface RunRecord {

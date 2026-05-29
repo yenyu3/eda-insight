@@ -9,6 +9,7 @@ import RiskPanel from '../components/RiskPanel'
 import WaveformChart from '../components/WaveformChart'
 import DependencyGraph from '../components/DependencyGraph'
 import LogViewer from '../components/LogViewer'
+import LogicFlowchart from '../components/LogicFlowchart'
 import type { AnalysisResult, StageLog, StageStatus } from '../types'
 
 type ViewMode = 'tech' | 'ai'
@@ -189,6 +190,16 @@ export default function Analysis() {
             <section className="surface-card panel">
               <h2 className="panel-title">Dependency Graph</h2>
               <p className="text-sm text-black/45">No module dependency graph is available.</p>
+            </section>
+          )}
+
+          {isDone && (
+            <section className="surface-card panel">
+              <h2 className="panel-title">Logic Flowchart</h2>
+              {result?.flowchart
+                ? <LogicFlowchart data={result.flowchart} />
+                : <p className="text-sm text-black/45">No flowchart data available for this design.</p>
+              }
             </section>
           )}
         </div>
