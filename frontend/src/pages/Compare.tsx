@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import MetricCard from '../components/MetricCard'
 import type { CompareResult, DiffEntry, HistoryData, RunRecord } from '../types'
+import { formatTaipeiDateTime } from '../utils/dateTime'
 
 function DeltaBadge({ diff }: { diff: DiffEntry | undefined }) {
   if (!diff || diff.delta == null) return <span className="text-xs text-black/40">N/A</span>
@@ -71,7 +72,7 @@ function RunSelect({
             <>
               <span className="run-select-title">{selected.filename}</span>
               <span className="run-select-meta">
-                {new Date(selected.created_at).toLocaleString('zh-TW')}
+                {formatTaipeiDateTime(selected.created_at)}
               </span>
             </>
           ) : (
@@ -103,7 +104,7 @@ function RunSelect({
               <span className="min-w-0 flex-1">
                 <span className="run-option-title">{run.filename}</span>
                 <span className="run-option-meta">
-                  {new Date(run.created_at).toLocaleString('zh-TW')}
+                  {formatTaipeiDateTime(run.created_at)}
                   {run.ppa_cell_count != null && ` · ${run.ppa_cell_count} cells`}
                 </span>
               </span>

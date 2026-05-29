@@ -6,6 +6,7 @@ export default function Upload() {
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [starting, setStarting] = useState(false)
   const [parseResult, setParseResult] = useState<ParserResult | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,13 +50,25 @@ export default function Upload() {
   }
 
   async function handleRun() {
-    if (!runId) return
-    await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run_id: runId }),
-    })
-    navigate(`/analysis/${runId}`)
+    if (!runId || starting) return
+    setStarting(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId }),
+      })
+      if (!res.ok) {
+        throw new Error(`Analysis failed to start with status ${res.status}`)
+      }
+      window.localStorage.setItem('eda-insight:last-run-id', runId)
+      navigate(`/analysis/${runId}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
   }
 
   const modules = parseResult?.modules ?? []
@@ -144,8 +157,8 @@ export default function Upload() {
               >
                 Choose different files
               </button>
-              <button onClick={handleRun} className="btn-primary">
-                Start analysis
+              <button onClick={handleRun} disabled={starting} className="btn-primary">
+                {starting ? 'Starting...' : 'Start analysis'}
               </button>
             </div>
           </div>
@@ -179,8 +192,12 @@ export default function Upload() {
             </div>
           )}
 
-          <button onClick={handleRun} className="btn-primary mt-5 w-full md:hidden">
-            Start analysis
+          <button
+            onClick={handleRun}
+            disabled={starting}
+            className="btn-primary mt-5 w-full md:hidden"
+          >
+            {starting ? 'Starting...' : 'Start analysis'}
           </button>
         </div>
       )}
