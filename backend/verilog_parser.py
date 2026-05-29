@@ -55,10 +55,11 @@ def _extract_modules(code: str) -> list[dict]:
     )
     for m in pattern.finditer(code):
         name = m.group(1)
+        has_port_list = m.group(2) is not None
         port_list_raw = m.group(2) or ""
         body = m.group(3)
 
-        ports = _parse_ports(port_list_raw, body)
+        ports = _parse_ports(port_list_raw, body, has_port_list)
         signals = _extract_signals(port_list_raw, body)
         logic_type = _detect_logic_type(body)
         instantiations = _extract_instantiations(body, name)
@@ -73,7 +74,7 @@ def _extract_modules(code: str) -> list[dict]:
     return modules
 
 
-def _parse_ports(port_list_raw: str, body: str) -> list[dict]:
+def _parse_ports_legacy(port_list_raw: str, body: str, has_port_list: bool = True) -> list[dict]:
     """
     解析 port 宣告，支援兩種風格：
     - ANSI style（port 方向直接寫在 module(...)）
@@ -83,8 +84,9 @@ def _parse_ports(port_list_raw: str, body: str) -> list[dict]:
     seen = set()
 
     # ANSI style：input/output/inout 直接在 port list 裡
+    # (?:reg|wire|logic)? 處理 Verilog/SV 所有 port 型別修飾詞，避免把 wire/logic 誤抓成 port name
     ansi_pattern = re.compile(
-        r'\b(input|output|inout)\s+(?:reg\s+)?(?:\[(\d+):(\d+)\]\s*)?(\w+)', re.IGNORECASE
+        r'\b(input|output|inout)\s+(?:(?:reg|wire|logic)\s+)?(?:\[(\d+):(\d+)\]\s*)?(\w+)', re.IGNORECASE
     )
     for m in ansi_pattern.finditer(port_list_raw):
         direction, high, low, pname = m.group(1), m.group(2), m.group(3), m.group(4)
@@ -144,7 +146,7 @@ def _detect_logic_type(body: str) -> str:
     return "combinational"
 
 
-def _extract_instantiations(body: str, current_module: str) -> list[str]:
+def _extract_instantiations_legacy(body: str, current_module: str) -> list[str]:
     """
     找出子模組例化（module instantiation）的模組名稱。
     排除關鍵字（always, assign, if, else, begin, end 等）以避免誤判。
@@ -152,8 +154,12 @@ def _extract_instantiations(body: str, current_module: str) -> list[str]:
     keywords = {
         "module", "endmodule", "input", "output", "inout", "wire", "reg",
         "always", "assign", "initial", "begin", "end", "if", "else", "case",
-        "endcase", "for", "while", "parameter", "localparam", "posedge",
-        "negedge", "integer", "generate", "endgenerate",
+        "endcase", "casez", "casex", "for", "while", "parameter", "localparam",
+        "posedge", "negedge", "integer", "generate", "endgenerate",
+        "task", "endtask", "function", "endfunction", "automatic",
+        "fork", "join", "disable", "force", "release", "event",
+        "time", "realtime", "defparam", "repeat", "forever",
+        "supply0", "supply1", "tri", "signed", "unsigned",
     }
     insts = []
     # 格式：模組名 實例名 (...)
@@ -162,6 +168,129 @@ def _extract_instantiations(body: str, current_module: str) -> list[str]:
         module_name = m.group(1)
         if module_name.lower() not in keywords and module_name != current_module:
             insts.append(module_name)
+    return list(dict.fromkeys(insts))
+
+
+def _parse_ports(port_list_raw: str, body: str, has_port_list: bool = True) -> list[dict]:
+    """Parse ANSI and non-ANSI module ports."""
+    ports = []
+    seen = set()
+
+    for decl in _split_port_declarations(port_list_raw):
+        parsed = _parse_port_declaration(decl)
+        if not parsed:
+            continue
+        direction, width, names = parsed
+        for pname in names:
+            if pname not in seen:
+                ports.append({"name": pname, "direction": direction, "width": width})
+                seen.add(pname)
+
+    if not ports and has_port_list and port_list_raw.strip():
+        header_names = {
+            p.strip()
+            for p in port_list_raw.split(",")
+            if re.match(r'^\s*\w+\s*$', p)
+        }
+        body_decl_pattern = re.compile(
+            r'(?:^|(?<=;))\s*(input|output|inout)\s+(?:(?:reg|wire|logic)\s+)?(?:\[(\d+)\s*:\s*(\d+)\]\s*)?([^;]+);',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        for m in body_decl_pattern.finditer(body):
+            direction = m.group(1).lower()
+            high, low = m.group(2), m.group(3)
+            width = (abs(int(high) - int(low)) + 1) if high is not None else 1
+            for pname in _extract_decl_names(m.group(4)):
+                if pname in header_names and pname not in seen:
+                    ports.append({"name": pname, "direction": direction, "width": width})
+                    seen.add(pname)
+
+    return ports
+
+
+def _split_port_declarations(port_list_raw: str) -> list[str]:
+    declarations = []
+    current = []
+    depth = 0
+    for ch in port_list_raw:
+        if ch == "[":
+            depth += 1
+        elif ch == "]" and depth > 0:
+            depth -= 1
+        if ch == "," and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                declarations.append(part)
+            current = []
+        else:
+            current.append(ch)
+
+    part = "".join(current).strip()
+    if part:
+        declarations.append(part)
+
+    merged = []
+    active = ""
+    for part in declarations:
+        if re.match(r'^(input|output|inout)\b', part, re.IGNORECASE):
+            if active:
+                merged.append(active)
+            active = part
+        elif active:
+            active += ", " + part
+        else:
+            merged.append(part)
+    if active:
+        merged.append(active)
+    return merged
+
+
+def _parse_port_declaration(decl: str) -> tuple[str, int, list[str]] | None:
+    m = re.match(
+        r'^\s*(input|output|inout)\s+(?:(?:reg|wire|logic|signed|unsigned)\s+)*'
+        r'(?:\[(\d+)\s*:\s*(\d+)\]\s*)?(.+)$',
+        decl,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    direction = m.group(1).lower()
+    high, low = m.group(2), m.group(3)
+    width = (abs(int(high) - int(low)) + 1) if high is not None else 1
+    return direction, width, _extract_decl_names(m.group(4))
+
+
+def _extract_decl_names(raw: str) -> list[str]:
+    names = []
+    for part in raw.split(","):
+        part = re.sub(r'=.*$', '', part).strip()
+        m = re.match(r'(\w+)', part)
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def _extract_instantiations(body: str, current_module: str) -> list[str]:
+    keywords = {
+        "module", "endmodule", "input", "output", "inout", "wire", "reg",
+        "always", "assign", "initial", "begin", "end", "if", "else", "case",
+        "endcase", "casez", "casex", "for", "while", "parameter", "localparam",
+        "posedge", "negedge", "integer", "generate", "endgenerate",
+        "task", "endtask", "function", "endfunction", "automatic",
+        "fork", "join", "disable", "force", "release", "event",
+        "time", "realtime", "defparam", "repeat", "forever",
+        "supply0", "supply1", "tri", "signed", "unsigned",
+    }
+    insts = []
+    patterns = [
+        re.compile(r'(?:^|(?<=;))\s*(\w+)\s*#\s*\([\s\S]*?\)\s+(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'(?:^|(?<=;))\s*(\w+)\s+(\w+)\s*\(', re.MULTILINE),
+    ]
+    for pattern in patterns:
+        for m in pattern.finditer(body):
+            module_name = m.group(1)
+            if module_name.lower() not in keywords and module_name != current_module:
+                insts.append(module_name)
     return list(dict.fromkeys(insts))
 
 
