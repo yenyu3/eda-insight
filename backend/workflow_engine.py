@@ -9,11 +9,12 @@ MVP 版本：固定依序執行 lint → simulate → synthesize pipeline。
 """
 
 import os
+import json
 import shutil
 import subprocess
 import time
 
-from db_manager import update_run_field, update_run_status, upsert_stage_log, get_stage_logs
+from db_manager import update_run_field, update_run_status, upsert_stage_log, get_stage_logs, get_run
 from verilog_parser import parse_verilog
 from vcd_parser import parse_vcd
 from report_parser import parse_synthesis_report, parse_synthesis_json
@@ -21,6 +22,7 @@ from dependency_analyzer import build_dag
 
 # 固定 pipeline 步驟順序
 FIXED_PIPELINE = ["lint", "simulate", "synthesize"]
+VALID_STEPS = {"lint", "simulate", "synthesize"}
 USE_FIXED_PIPELINE = os.environ.get("USE_FIXED_PIPELINE", "true").lower() == "true"
 
 
@@ -36,8 +38,6 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
         steps: 動態 pipeline 步驟清單（None 時使用固定流程）
     """
     run_dir = os.path.dirname(verilog_path)
-    pipeline = FIXED_PIPELINE if (USE_FIXED_PIPELINE or steps is None) else steps
-
     update_run_status(run_id, "running")
 
     try:
@@ -47,6 +47,8 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
         upsert_stage_log(run_id, "verilog_parse", "error", f"{type(e).__name__}: {e}")
         update_run_status(run_id, "error")
         return
+
+    pipeline = _stage_ai_plan(run_id, parser_result, steps)
 
     # Stage 2: Lint（不阻斷後續）
     if "lint" in pipeline:
@@ -60,7 +62,9 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
         try:
             _stage_simulate(run_id, verilog_path, run_dir)
         except Exception as e:
-            upsert_stage_log(run_id, "simulation", "error", f"{type(e).__name__}: {e}")
+            err = f"{type(e).__name__}: {e}"
+            upsert_stage_log(run_id, "simulation", "error", err)
+            _save_debug_advice(run_id, "simulation", err, run_dir)
 
     # Stage 4: Dependency analysis（只需 parser_result，與 yosys 無關，先跑）
     try:
@@ -73,12 +77,20 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
         try:
             _stage_synthesize(run_id, verilog_path, run_dir, parser_result)
         except Exception as e:
-            upsert_stage_log(run_id, "synthesis", "error", f"{type(e).__name__}: {e}")
+            err = f"{type(e).__name__}: {e}"
+            upsert_stage_log(run_id, "synthesis", "error", err)
+            _save_debug_advice(run_id, "synthesis", err, run_dir)
 
     # 若所有 stage 沒有 error 則標記 done，否則 error
     stage_logs = {s["stage"]: s["status"] for s in get_stage_logs(run_id)}
-    has_error = any(v == "error" for v in stage_logs.values())
-    update_run_status(run_id, "error" if has_error else "done")
+    has_core_error = any(
+        status == "error"
+        for stage, status in stage_logs.items()
+        if stage != "ai_report"
+    )
+    if not has_core_error:
+        _stage_ai_report(run_id)
+    update_run_status(run_id, "error" if has_core_error else "done")
 
 
 # ------------------------------------------------------------------
@@ -109,6 +121,53 @@ def _stage_verilog_parse(run_id: str, verilog_content: str, run_dir: str | None 
     update_run_field(run_id, "parser_result", result)
     upsert_stage_log(run_id, "verilog_parse", "done", f"解析完成，找到 {len(result['modules'])} 個 module", duration)
     return result
+
+
+def _stage_ai_plan(run_id: str, parser_result: dict, goals) -> list[str]:
+    """Select pipeline steps using fixed mode or AI workflow_planner."""
+    t0 = time.time()
+    requested_steps = _normalize_requested_steps(goals)
+
+    if USE_FIXED_PIPELINE:
+        plan = {
+            "steps": FIXED_PIPELINE,
+            "reason": "fixed pipeline mode",
+            "source": "fixed",
+        }
+        update_run_field(run_id, "workflow_plan", plan)
+        upsert_stage_log(run_id, "ai_plan", "done", plan["reason"], 0)
+        return plan["steps"]
+
+    upsert_stage_log(run_id, "ai_plan", "running", "")
+    try:
+        from ai_engine import AIEngine
+
+        insight_text = _parser_result_summary(parser_result)
+        user_goals = ", ".join(requested_steps) if requested_steps else "simulate, synthesize"
+        ai_plan = AIEngine().workflow_planner(insight_text, user_goals)
+        planned_steps = _normalize_requested_steps(ai_plan.get("steps"))
+        if not planned_steps:
+            planned_steps = requested_steps or FIXED_PIPELINE
+        plan = {
+            "steps": planned_steps,
+            "reason": ai_plan.get("reason") or "AI planner selected pipeline steps.",
+            "source": "ai",
+        }
+        update_run_field(run_id, "workflow_plan", plan)
+        duration = int((time.time() - t0) * 1000)
+        upsert_stage_log(run_id, "ai_plan", "done", plan["reason"], duration)
+        return planned_steps
+    except Exception as e:
+        fallback = requested_steps or FIXED_PIPELINE
+        plan = {
+            "steps": fallback,
+            "reason": f"planner fallback: {type(e).__name__}: {e}",
+            "source": "fallback",
+        }
+        update_run_field(run_id, "workflow_plan", plan)
+        duration = int((time.time() - t0) * 1000)
+        upsert_stage_log(run_id, "ai_plan", "error", plan["reason"], duration)
+        return fallback
 
 
 def _stage_lint(run_id: str, parser_result: dict) -> None:
@@ -149,8 +208,10 @@ def _stage_simulate(run_id: str, verilog_path: str, run_dir: str) -> str | None:
     )
     if compile_result.returncode != 0:
         duration = int((time.time() - t0) * 1000)
-        upsert_stage_log(run_id, "simulation", "error", compile_result.stderr, duration)
-        update_run_field(run_id, "sim_result", {"error": compile_result.stderr})
+        err = _format_tool_error(compile_result)
+        upsert_stage_log(run_id, "simulation", "error", err, duration)
+        update_run_field(run_id, "sim_result", {"error": err})
+        _save_debug_advice(run_id, "simulation", err, run_dir)
         return None
 
     # 執行模擬
@@ -164,8 +225,10 @@ def _stage_simulate(run_id: str, verilog_path: str, run_dir: str) -> str | None:
     duration = int((time.time() - t0) * 1000)
 
     if sim_result.returncode != 0:
-        upsert_stage_log(run_id, "simulation", "error", sim_result.stderr, duration)
-        update_run_field(run_id, "sim_result", {"error": sim_result.stderr})
+        err = _format_tool_error(sim_result)
+        upsert_stage_log(run_id, "simulation", "error", err, duration)
+        update_run_field(run_id, "sim_result", {"error": err})
+        _save_debug_advice(run_id, "simulation", err, run_dir)
         return None
 
     # 解析 VCD：掃描 run_dir 下所有 .vcd 檔案（testbench 可能用任意名稱）
@@ -223,8 +286,10 @@ def _stage_synthesize(run_id: str, verilog_path: str, run_dir: str, parser_resul
     duration = int((time.time() - t0) * 1000)
 
     if result.returncode != 0:
-        upsert_stage_log(run_id, "synthesis", "error", result.stderr, duration)
-        update_run_field(run_id, "synthesis_result", {"error": result.stderr})
+        err = _format_tool_error(result)
+        upsert_stage_log(run_id, "synthesis", "error", err, duration)
+        update_run_field(run_id, "synthesis_result", {"error": err})
+        _save_debug_advice(run_id, "synthesis", err, run_dir)
         return
 
     # 優先從 JSON 解析（不受 Yosys stdout/stderr 分流影響）
@@ -262,6 +327,81 @@ def _stage_dependency(run_id: str, parser_result: dict) -> dict:
 # 工具函式
 # ------------------------------------------------------------------
 
+def _normalize_requested_steps(goals) -> list[str]:
+    if goals is None:
+        return []
+    raw = goals if isinstance(goals, list) else [goals]
+    normalized = []
+    aliases = {
+        "simulation": "simulate",
+        "sim": "simulate",
+        "synthesis": "synthesize",
+        "synth": "synthesize",
+        "lint only": "lint",
+        "dependency": None,
+        "dependency graph": None,
+        "dep_analysis": None,
+    }
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        key = item.strip().lower().replace("_", " ")
+        step = aliases.get(key, key)
+        if step in VALID_STEPS and step not in normalized:
+            normalized.append(step)
+    return normalized
+
+
+def _parser_result_summary(parser_result: dict) -> str:
+    modules = parser_result.get("modules", [])
+    compact = {
+        "module_count": len(modules),
+        "modules": [
+            {
+                "name": m.get("name"),
+                "logic_type": m.get("logic_type"),
+                "ports": len(m.get("ports", [])),
+                "instantiations": m.get("instantiations", []),
+            }
+            for m in modules
+        ],
+        "lint_issue_count": len(parser_result.get("lint_issues", [])),
+    }
+    return json.dumps(compact, ensure_ascii=False)
+
+
+def _stage_ai_report(run_id: str) -> None:
+    """Generate post-run log insight and risk scores after core EDA stages pass."""
+    t0 = time.time()
+    upsert_stage_log(run_id, "ai_report", "running", "Generating log insight and risk scores.")
+    try:
+        from ai_engine import AIEngine
+
+        run = get_run(run_id) or {}
+        logs = get_stage_logs(run_id)
+        log_text = _format_stage_logs_for_ai(logs)
+        synthesis = run.get("synthesis_result") or {}
+        waveform = run.get("sim_result") or {}
+        waveform_stats = waveform.get("stats", {}) if isinstance(waveform, dict) else {}
+        dependency_graph = run.get("dependency_graph") or {}
+
+        engine = AIEngine()
+        log_insight = engine.log_insight(log_text)
+        risk_scores = engine.risk_analyzer(synthesis, waveform_stats)
+        bottleneck_analysis = engine.bottleneck_detector(dependency_graph)
+        summary = _format_ai_summary(log_insight, risk_scores, bottleneck_analysis)
+
+        update_run_field(run_id, "ai_summary", summary)
+        update_run_field(run_id, "risk_scores", risk_scores)
+        update_run_field(run_id, "bottleneck_analysis", bottleneck_analysis)
+        duration = int((time.time() - t0) * 1000)
+        upsert_stage_log(run_id, "ai_report", "done", summary[:1000], duration)
+    except Exception as e:
+        duration = int((time.time() - t0) * 1000)
+        msg = f"{type(e).__name__}: {e}"
+        upsert_stage_log(run_id, "ai_report", "error", msg, duration)
+
+
 def _find_verilog_files(run_dir: str) -> list[str]:
     """找出指定目錄下的所有 .v 檔案（絕對路徑）。"""
     files = []
@@ -269,6 +409,91 @@ def _find_verilog_files(run_dir: str) -> list[str]:
         if fname.endswith(".v"):
             files.append(os.path.join(run_dir, fname))
     return files
+
+
+def _format_stage_logs_for_ai(logs: list[dict]) -> str:
+    lines = []
+    for log in logs:
+        stage = log.get("stage", "unknown")
+        status = log.get("status", "unknown")
+        output = (log.get("log_output") or "").strip()
+        if output:
+            lines.append(f"[{stage}:{status}]\n{output}")
+        else:
+            lines.append(f"[{stage}:{status}]")
+    return "\n\n".join(lines)
+
+
+def _format_ai_summary(log_insight: dict, risk_scores: dict, bottleneck_analysis: dict | None = None) -> str:
+    summary = (log_insight or {}).get("summary") or "Log analysis completed."
+    warnings = (log_insight or {}).get("warnings") or []
+    events = (log_insight or {}).get("events") or []
+    parts = ["AI LOG INTERPRETATION", summary]
+    if warnings:
+        parts.append("WARNINGS\n" + "\n".join(f"- {w}" for w in warnings[:5]))
+    if events:
+        parts.append("EVENTS\n" + "\n".join(f"- {e}" for e in events[:5]))
+    if risk_scores:
+        parts.append(
+            "RISK SCORES\n"
+            f"Timing: {risk_scores.get('timing_risk', 'N/A')}\n"
+            f"Area: {risk_scores.get('area_risk', 'N/A')}\n"
+            f"Function: {risk_scores.get('function_risk', 'N/A')}\n"
+            f"{risk_scores.get('summary', '')}".strip()
+        )
+    if bottleneck_analysis:
+        bottlenecks = bottleneck_analysis.get("bottlenecks") or []
+        impact = bottleneck_analysis.get("impact") or ""
+        suggestions = bottleneck_analysis.get("suggestions") or ""
+        parts.append(
+            "BOTTLENECK ANALYSIS\n"
+            f"Nodes: {', '.join(bottlenecks) if bottlenecks else 'None'}\n"
+            f"Impact: {impact}\n"
+            f"Suggestions: {suggestions}".strip()
+        )
+    return "\n\n".join(parts)
+
+
+def _format_tool_error(result: subprocess.CompletedProcess) -> str:
+    """Keep enough EDA output for AI diagnosis without flooding the database."""
+    parts = []
+    if result.stderr:
+        parts.append(result.stderr.strip())
+    if result.stdout:
+        parts.append(result.stdout.strip())
+    return "\n\n".join(parts).strip() or f"Tool exited with code {result.returncode}"
+
+
+def _read_verilog_sources(run_dir: str) -> str:
+    parts = []
+    for fname in sorted(os.listdir(run_dir)):
+        if not fname.endswith(".v"):
+            continue
+        path = os.path.join(run_dir, fname)
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            parts.append(f"// File: {fname}\n{f.read()}")
+    return "\n\n".join(parts)
+
+
+def _save_debug_advice(run_id: str, stage: str, stderr_text: str, run_dir: str) -> None:
+    """
+    Run AI debug_advisor after an EDA stage fails and persist the guidance.
+    The AI engine already falls back to mock output when no API key is configured.
+    """
+    upsert_stage_log(run_id, "ai_report", "running", f"Generating debug advice for {stage} failure.")
+    try:
+        from ai_engine import AIEngine
+
+        verilog_content = _read_verilog_sources(run_dir)
+        engine = AIEngine()
+        advice = "".join(engine.debug_advisor(stderr_text[:2000], verilog_content[:4000])).strip()
+        summary = f"[{stage} debug advisor]\n{advice}" if advice else f"[{stage} debug advisor]\nNo advice generated."
+        update_run_field(run_id, "ai_summary", summary)
+        upsert_stage_log(run_id, "ai_report", "done", summary[:1000])
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        update_run_field(run_id, "ai_summary", f"[{stage} debug advisor failed]\n{msg}")
+        upsert_stage_log(run_id, "ai_report", "error", msg)
 
 
 def _resolve_tool(tool_name: str) -> str:

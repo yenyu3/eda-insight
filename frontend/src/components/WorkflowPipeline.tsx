@@ -3,6 +3,7 @@ import type { Stage, StageStatus } from '../types'
 
 const STAGE_LABELS: Record<string, string> = {
   verilog_parse: 'Verilog Parse',
+  ai_plan: 'AI Plan',
   lint: 'Lint Check',
   simulation: 'Simulation',
   synthesis: 'Synthesis',
