@@ -1,6 +1,10 @@
-﻿import sqlite3, json
+import json
+import sqlite3
+from pathlib import Path
 
-conn = sqlite3.connect('eda_platform.db')
+DB_PATH = Path(__file__).resolve().parent / "eda_platform.db"
+
+conn = sqlite3.connect(DB_PATH)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 

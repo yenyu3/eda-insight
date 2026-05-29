@@ -1,6 +1,10 @@
-﻿import sqlite3, json
+import json
+import sqlite3
+from pathlib import Path
 
-conn = sqlite3.connect('eda_platform.db')
+DB_PATH = Path(__file__).resolve().parent / "eda_platform.db"
+
+conn = sqlite3.connect(DB_PATH)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
@@ -8,6 +12,10 @@ cur.execute("SELECT run_id, filename, status, created_at FROM runs WHERE filenam
 rows = cur.fetchall()
 for r in rows:
     print(f"run_id={r['run_id'][:8]}  file={r['filename']}  status={r['status']}  created={r['created_at']}")
+
+if not rows:
+    conn.close()
+    raise SystemExit("No ALU runs found.")
 
 run_id = rows[0]['run_id']
 print(f"\n=== Checking {run_id[:8]} ===")
