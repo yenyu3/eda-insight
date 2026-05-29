@@ -21,8 +21,8 @@ from report_parser import parse_synthesis_report, parse_synthesis_json
 from dependency_analyzer import build_dag
 
 # 固定 pipeline 步驟順序
-FIXED_PIPELINE = ["lint", "simulate", "synthesize"]
-VALID_STEPS = {"lint", "simulate", "synthesize"}
+FIXED_PIPELINE = ["lint", "simulate", "synthesize", "dependency"]
+VALID_STEPS = {"lint", "simulate", "synthesize", "dependency"}
 USE_FIXED_PIPELINE = os.environ.get("USE_FIXED_PIPELINE", "true").lower() == "true"
 
 
@@ -67,10 +67,11 @@ def run_pipeline(run_id: str, verilog_path: str, verilog_content: str, steps: li
             _save_debug_advice(run_id, "simulation", err, run_dir)
 
     # Stage 4: Dependency analysis（只需 parser_result，與 yosys 無關，先跑）
-    try:
-        _stage_dependency(run_id, parser_result)
-    except Exception as e:
-        upsert_stage_log(run_id, "dep_analysis", "error", f"{type(e).__name__}: {e}")
+    if "dependency" in pipeline:
+        try:
+            _stage_dependency(run_id, parser_result)
+        except Exception as e:
+            upsert_stage_log(run_id, "dep_analysis", "error", f"{type(e).__name__}: {e}")
 
     # Stage 5: Synthesize（yosys，不阻斷其他 stage）
     if "synthesize" in pipeline:
@@ -129,9 +130,10 @@ def _stage_ai_plan(run_id: str, parser_result: dict, goals) -> list[str]:
     requested_steps = _normalize_requested_steps(goals)
 
     if USE_FIXED_PIPELINE:
+        selected_steps = requested_steps or FIXED_PIPELINE
         plan = {
-            "steps": FIXED_PIPELINE,
-            "reason": "fixed pipeline mode",
+            "steps": selected_steps,
+            "reason": "fixed pipeline mode with requested goals" if requested_steps else "fixed pipeline mode",
             "source": "fixed",
         }
         update_run_field(run_id, "workflow_plan", plan)
@@ -338,9 +340,10 @@ def _normalize_requested_steps(goals) -> list[str]:
         "synthesis": "synthesize",
         "synth": "synthesize",
         "lint only": "lint",
-        "dependency": None,
-        "dependency graph": None,
-        "dep_analysis": None,
+        "dependency": "dependency",
+        "dependency graph": "dependency",
+        "dep analysis": "dependency",
+        "dep_analysis": "dependency",
     }
     for item in raw:
         if not isinstance(item, str):
@@ -349,7 +352,12 @@ def _normalize_requested_steps(goals) -> list[str]:
         step = aliases.get(key, key)
         if step in VALID_STEPS and step not in normalized:
             normalized.append(step)
-    return normalized
+    return _ordered_steps(normalized)
+
+
+def _ordered_steps(steps: list[str]) -> list[str]:
+    selected = set(steps)
+    return [step for step in FIXED_PIPELINE if step in selected]
 
 
 def _parser_result_summary(parser_result: dict) -> str:

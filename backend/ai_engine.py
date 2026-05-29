@@ -19,7 +19,7 @@ except ImportError:
 
 MODEL = "claude-sonnet-4-20250514"
 MAX_TOKENS = 1024
-VALID_STEPS = {"lint", "simulate", "synthesize"}
+VALID_STEPS = {"lint", "simulate", "synthesize", "dependency"}
 
 
 def _use_mock() -> bool:
@@ -96,13 +96,13 @@ Verilog 解析結果：{json.dumps(parser_result, ensure_ascii=False)[:2000]}"""
         Returns:
             {"steps": ["simulate", "synthesize"], "reason": str}
         """
-        fallback = {"steps": ["lint", "simulate", "synthesize"], "reason": "fallback: AI 回傳格式有誤"}
+        fallback = {"steps": ["lint", "simulate", "synthesize", "dependency"], "reason": "fallback: AI 回傳格式有誤"}
 
         if self._mock:
-            return {"steps": ["simulate", "synthesize"], "reason": "mock: 預設流程"}
+            return {"steps": ["simulate", "synthesize", "dependency"], "reason": "mock: 預設流程"}
 
         prompt = f"""你是 EDA workflow 規劃專家。根據以下資訊，決定這次要執行哪些分析步驟。
-steps 只能從 ["lint", "simulate", "synthesize"] 中選擇，可以選一個或多個。
+steps 只能從 ["lint", "simulate", "synthesize", "dependency"] 中選擇，可以選一個或多個。
 回傳純 JSON，不要任何 markdown backtick 或說明文字：
 {{
   "steps": ["simulate", "synthesize"],

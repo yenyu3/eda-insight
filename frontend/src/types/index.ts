@@ -38,7 +38,7 @@ export interface ParserResult {
 }
 
 export interface WorkflowPlan {
-  steps: Array<'lint' | 'simulate' | 'synthesize'>
+  steps: Array<'lint' | 'simulate' | 'synthesize' | 'dependency'>
   reason: string
   source: 'fixed' | 'ai' | 'fallback'
 }

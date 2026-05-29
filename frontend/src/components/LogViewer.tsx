@@ -9,17 +9,27 @@ function colorLine(line: string): string {
 
 interface LogViewerProps {
   stages?: StageLog[]
+  error?: string | null
+  loading?: boolean
 }
 
-export default function LogViewer({ stages = [] }: LogViewerProps) {
+export default function LogViewer({ stages = [], error = null, loading = false }: LogViewerProps) {
   const lines = stages.flatMap((s) =>
     s.log_output
       ? s.log_output.split('\n').filter(Boolean).map((l) => ({ stage: s.stage, line: l }))
-      : []
+      : [{ stage: s.stage, line: `${s.status}${s.duration_ms != null ? ` (${s.duration_ms} ms)` : ''}` }]
   )
 
+  if (error) {
+    return <p className="text-xs text-red-500 p-3">Failed to load logs: {error}</p>
+  }
+
+  if (loading && !lines.length) {
+    return <p className="text-xs text-gray-400 p-3">Loading logs...</p>
+  }
+
   if (!lines.length) {
-    return <p className="text-xs text-gray-400 p-3">No logs yet.</p>
+    return <p className="text-xs text-gray-400 p-3">Waiting for stage logs...</p>
   }
 
   return (

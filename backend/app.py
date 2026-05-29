@@ -56,6 +56,7 @@ def health_check():
             "/api/run",
             "/api/status/<run_id>",
             "/api/result/<run_id>",
+            "/api/logs/<run_id>",
             "/api/stream/<run_id>",
             "/api/compare",
         ],
@@ -181,7 +182,7 @@ def get_status(run_id: str):
     stage_logs = db_manager.get_stage_logs(run_id)
     stage_map = {s["stage"]: s for s in stage_logs}
 
-    all_stages = ["verilog_parse", "ai_plan", "lint", "simulation", "synthesis", "dep_analysis", "ai_report"]
+    all_stages = _status_stages(run)
     stages = []
     for name in all_stages:
         entry = stage_map.get(name, {})
@@ -196,6 +197,30 @@ def get_status(run_id: str):
         "overall": run.get("status") or "pending",
         "stages": stages,
     })
+
+
+def _status_stages(run: dict) -> list[str]:
+    workflow_plan = run.get("workflow_plan") or {}
+    planned_steps = workflow_plan.get("steps") if isinstance(workflow_plan, dict) else None
+    if not planned_steps:
+        return ["verilog_parse", "ai_plan", "lint", "simulation", "synthesis", "dep_analysis", "ai_report"]
+
+    stage_names = ["verilog_parse", "ai_plan"]
+    step_to_stage = {
+        "lint": "lint",
+        "simulate": "simulation",
+        "synthesize": "synthesis",
+        "dependency": "dep_analysis",
+    }
+    selected_steps = set(planned_steps)
+    for step in ("lint", "simulate", "dependency", "synthesize"):
+        if step not in selected_steps:
+            continue
+        stage = step_to_stage.get(step)
+        if stage and stage not in stage_names:
+            stage_names.append(stage)
+    stage_names.append("ai_report")
+    return stage_names
 
 
 # ------------------------------------------------------------------

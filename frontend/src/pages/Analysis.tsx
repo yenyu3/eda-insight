@@ -50,9 +50,12 @@ export default function Analysis() {
     enabled: !!runId && isDone,
   })
 
-  const { data: logsData } = useQuery<{ logs: StageLog[] }>({
+  const { data: logsData, error: logsError, isLoading: logsLoading } = useQuery<{ logs: StageLog[] }>({
     queryKey: ['logs', runId],
-    queryFn: () => fetch(`/api/logs/${runId}`).then((r) => r.json() as Promise<{ logs: StageLog[] }>),
+    queryFn: () => fetch(`/api/logs/${runId}`).then((r) => {
+      if (!r.ok) throw new Error(`logs fetch failed: ${r.status}`)
+      return r.json() as Promise<{ logs: StageLog[] }>
+    }),
     enabled: !!runId,
     refetchInterval: isDone ? false : 2000,
   })
@@ -135,7 +138,11 @@ export default function Analysis() {
 
       <section className="surface-card panel mb-5">
         <h2 className="panel-title">Live Log</h2>
-        <LogViewer stages={logsData?.logs ?? []} />
+        <LogViewer
+          stages={logsData?.logs ?? []}
+          loading={logsLoading}
+          error={logsError instanceof Error ? logsError.message : null}
+        />
       </section>
 
       {view === 'tech' && (
