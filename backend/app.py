@@ -24,6 +24,7 @@ import db_manager
 from verilog_parser import parse_verilog
 from workflow_engine import run_pipeline
 from ai_engine import AIEngine
+from flowchart_extractor import extract_flowchart
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
@@ -299,6 +300,14 @@ def get_result(run_id: str):
     if not run:
         return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
 
+    flowchart = None
+    verilog_content = run.get("verilog_content")
+    if verilog_content:
+        try:
+            flowchart = extract_flowchart(verilog_content)
+        except Exception as e:
+            flowchart = {"error": True, "message": str(e)}
+
     return jsonify({
         "run_id": run_id,
         "filename": run["filename"],
@@ -311,6 +320,7 @@ def get_result(run_id: str):
         "risk_scores": run.get("risk_scores"),
         "bottleneck_analysis": run.get("bottleneck_analysis"),
         "lint_issues": (run.get("parser_result") or {}).get("lint_issues", []),
+        "flowchart": flowchart,
     })
 
 
