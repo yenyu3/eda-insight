@@ -1,8 +1,8 @@
 """
 ai_engine.py — AI 分析引擎
 
-封裝 Anthropic Claude API 的所有呼叫。
-模型固定使用 claude-sonnet-4-20250514，max_tokens=1024。
+封裝 Anthropic Claude / Google Gemini API 的所有呼叫。
+可用 AI_PROVIDER=anthropic 或 AI_PROVIDER=gemini 切換。
 提供六個功能模組：verilog_insight、workflow_planner、log_insight、
 debug_advisor、risk_analyzer、bottleneck_detector。
 """
@@ -17,7 +17,13 @@ try:
 except ImportError:
     anthropic = None
 
-MODEL = "claude-sonnet-4-20250514"
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
+ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+GEMINI_MODEL = "gemini-2.5-flash"
 MAX_TOKENS = 1024
 VALID_STEPS = {"lint", "simulate", "synthesize", "dependency"}
 
@@ -32,23 +38,49 @@ class AIEngine:
 
     def __init__(self):
         self.client = None
+        self.provider = os.environ.get("AI_PROVIDER", "anthropic").lower()
+        self.model = ""
         self._mock = True  # 預設 mock，成功建立 client 才設 False
 
         if _use_mock():
             return  # mock mode，直接結束
 
+        if self.provider == "gemini":
+            self._init_gemini()
+        else:
+            self.provider = "anthropic"
+            self._init_anthropic()
+
+    def _init_anthropic(self) -> None:
         if anthropic is None:
             return  # 套件未安裝，fallback mock
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key or api_key == "your-key-here":
+        if not api_key or api_key in {"your-key-here", "your-anthropic-key-here"}:
             return  # key 未設定，fallback mock
 
         try:
             self.client = anthropic.Anthropic(api_key=api_key)
+            self.model = os.environ.get("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
             self._mock = False
         except Exception:
             # 任何初始化錯誤（如 proxies 相容性問題）都 fallback mock
+            self.client = None
+            self._mock = True
+
+    def _init_gemini(self) -> None:
+        if genai is None:
+            return  # 套件未安裝，fallback mock
+
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key or api_key == "your-gemini-key-here":
+            return  # key 未設定，fallback mock
+
+        try:
+            self.client = genai.Client(api_key=api_key)
+            self.model = os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
+            self._mock = False
+        except Exception:
             self.client = None
             self._mock = True
 
@@ -113,12 +145,7 @@ steps 只能從 ["lint", "simulate", "synthesize", "dependency"] 中選擇，可
 使用者目標：{user_goals}"""
 
         try:
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=256,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text
+            raw = self._complete(prompt, max_tokens=256)
             data = _safe_parse_json(raw)
             steps = data.get("steps", [])
             # 驗證：所有步驟必須在 VALID_STEPS 中
@@ -145,7 +172,8 @@ steps 只能從 ["lint", "simulate", "synthesize", "dependency"] 中選擇，可
         if self._mock:
             return {"events": [], "warnings": [], "summary": "Mock: log 分析完成，無重大問題。"}
 
-        prompt = f"""你是 EDA 工具 log 分析專家。分析以下 log，回傳純 JSON，不要 markdown backtick：
+        prompt = f"""你是 EDA 工具 log 分析專家。分析以下 log，回傳純 JSON，不要 markdown backtick。
+JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語法：
 {{
   "events": ["重要事件1", "重要事件2"],
   "warnings": ["warning 說明1"],
@@ -156,12 +184,7 @@ Log 內容（最多 2000 字元）：
 {log_text[:2000]}"""
 
         try:
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return _safe_parse_json(response.content[0].text)
+            return _safe_parse_json(self._complete(prompt))
         except Exception as e:
             return {"events": [], "warnings": [], "summary": f"分析失敗：{e}"}
 
@@ -216,7 +239,8 @@ Verilog 程式碼：
             return {"timing_risk": 2.5, "area_risk": 4.0, "function_risk": 1.0, "summary": "Mock: 電路整體風險偏低。"}
 
         prompt = f"""你是 EDA 設計風險分析師。根據以下合成與模擬資料，評估設計風險。
-分數範圍 0-10（越高越危險）。回傳純 JSON，不要 markdown backtick：
+分數範圍 0-10（越高越危險）。回傳純 JSON，不要 markdown backtick。
+JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語法：
 {{
   "timing_risk": 數字,
   "area_risk": 數字,
@@ -228,12 +252,7 @@ Verilog 程式碼：
 波形統計：{json.dumps(waveform_stats, ensure_ascii=False)}"""
 
         try:
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return _safe_parse_json(response.content[0].text)
+            return _safe_parse_json(self._complete(prompt, max_tokens=512))
         except Exception as e:
             return {"timing_risk": 0, "area_risk": 0, "function_risk": 0, "summary": f"分析失敗：{e}"}
 
@@ -259,7 +278,8 @@ Verilog 程式碼：
 2. 這些節點對整體設計的影響
 3. 具體的優化建議
 
-回傳純 JSON，不要 markdown backtick：
+回傳純 JSON，不要 markdown backtick。
+JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語法：
 {{
   "bottlenecks": ["module_name1"],
   "impact": "影響說明",
@@ -269,12 +289,7 @@ Verilog 程式碼：
 DAG 資訊：{json.dumps(dag_result, ensure_ascii=False)[:1500]}"""
 
         try:
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return _safe_parse_json(response.content[0].text)
+            return _safe_parse_json(self._complete(prompt))
         except Exception as e:
             return {"bottlenecks": [], "impact": f"分析失敗：{e}", "suggestions": ""}
 
@@ -284,13 +299,33 @@ DAG 資訊：{json.dumps(dag_result, ensure_ascii=False)[:1500]}"""
 
     def _stream(self, prompt: str) -> Generator[str, None, None]:
         """執行 streaming 呼叫，yield 每個文字片段。"""
+        if self.provider == "gemini":
+            yield self._complete(prompt)
+            return
+
         with self.client.messages.stream(
-            model=MODEL,
+            model=self.model,
             max_tokens=MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             for text in stream.text_stream:
                 yield text
+
+    def _complete(self, prompt: str, max_tokens: int = MAX_TOKENS) -> str:
+        """執行非串流模型呼叫，回傳純文字。"""
+        if self.provider == "gemini":
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+            )
+            return response.text or ""
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
 
 
 # ------------------------------------------------------------------
