@@ -9,9 +9,15 @@ app 啟動時自動建表（CREATE TABLE IF NOT EXISTS）。
 import sqlite3
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "eda_platform.db")
+TAIPEI_TZ = timezone(timedelta(hours=8))
+
+
+def taipei_now() -> str:
+    """Return an ISO timestamp in Taiwan local time for persisted records."""
+    return datetime.now(TAIPEI_TZ).replace(microsecond=0).isoformat()
 
 
 def get_connection() -> sqlite3.Connection:
@@ -63,8 +69,8 @@ def create_run(run_id: str, filename: str, verilog_content: str) -> None:
     conn = get_connection()
     with conn:
         conn.execute(
-            "INSERT INTO runs (run_id, filename, verilog_content, status) VALUES (?, ?, ?, 'pending')",
-            (run_id, filename, verilog_content),
+            "INSERT INTO runs (run_id, filename, verilog_content, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+            (run_id, filename, verilog_content, taipei_now()),
         )
     conn.close()
 
@@ -135,8 +141,8 @@ def upsert_stage_log(run_id: str, stage: str, status: str, log_output: str, dura
             )
         else:
             conn.execute(
-                "INSERT INTO stage_logs (run_id, stage, status, log_output, duration_ms) VALUES (?, ?, ?, ?, ?)",
-                (run_id, stage, status, log_output, duration_ms),
+                "INSERT INTO stage_logs (run_id, stage, status, log_output, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, stage, status, log_output, duration_ms, taipei_now()),
             )
     conn.close()
 

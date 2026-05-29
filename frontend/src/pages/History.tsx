@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import type { HistoryData } from '../types'
+import { formatTaipeiDateTime } from '../utils/dateTime'
 
 function dotClass(status: string) {
   if (status === 'done') return 'bg-emerald-500'
@@ -44,7 +45,7 @@ export default function History() {
               <span className="tag">{run.ppa_cell_count} cells</span>
             )}
             <span className="text-xs text-black/45">
-              {new Date(run.created_at).toLocaleString('zh-TW')}
+              {formatTaipeiDateTime(run.created_at)}
             </span>
             <span className="tag">{run.status}</span>
           </Link>

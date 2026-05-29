@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useRunStatus } from '../hooks/useRunStatus'
 import WorkflowPipeline from '../components/WorkflowPipeline'
@@ -23,8 +23,24 @@ export default function Analysis() {
   const { runId } = useParams<{ runId: string }>()
   const [view, setView] = useState<ViewMode>('tech')
 
-  const { data: status } = useRunStatus(runId)
+  const { data: status, isError: statusError } = useRunStatus(runId)
   const isDone = status?.overall === 'done' || status?.overall === 'error'
+
+  useEffect(() => {
+    if (status?.run_id) {
+      window.localStorage.setItem('eda-insight:last-run-id', status.run_id)
+    }
+  }, [status?.run_id])
+
+  useEffect(() => {
+    if (
+      statusError &&
+      runId &&
+      window.localStorage.getItem('eda-insight:last-run-id') === runId
+    ) {
+      window.localStorage.removeItem('eda-insight:last-run-id')
+    }
+  }, [runId, statusError])
 
   const { data: result } = useQuery<AnalysisResult>({
     queryKey: ['result', runId],
@@ -35,6 +51,23 @@ export default function Analysis() {
   const synth: Partial<AnalysisResult['synthesis']> = result?.synthesis ?? {}
   const stages = status?.stages ?? []
   const overallStatus = status?.overall as StageStatus | undefined
+
+  if (statusError) {
+    return (
+      <div className="eda-container eda-narrow">
+        <div className="surface-card panel">
+          <span className="section-kicker">Run Analysis</span>
+          <h1 className="page-title">Analysis run not found.</h1>
+          <p className="page-subtitle">
+            This run may have been removed or the backend database may have been reset.
+          </p>
+          <Link to="/history" className="btn-primary mt-5 inline-flex">
+            Open history
+          </Link>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="eda-container">

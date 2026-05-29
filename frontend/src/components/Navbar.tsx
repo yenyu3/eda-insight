@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Upload' },
+  { to: '/analysis', label: 'Analysis' },
   { to: '/history', label: 'History' },
   { to: '/compare', label: 'Compare' },
 ]
@@ -36,7 +37,11 @@ export default function Navbar() {
                 <li key={to}>
                   <Link
                     to={to}
-                    className={pathname === to ? 'active' : ''}
+                    className={
+                      pathname === to || (to === '/analysis' && pathname.startsWith('/analysis/'))
+                        ? 'active'
+                        : ''
+                    }
                   >
                     {label}
                   </Link>
