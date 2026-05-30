@@ -174,6 +174,41 @@ def upsert_stage_log(run_id: str, stage: str, status: str, log_output: str, dura
     conn.close()
 
 
+def delete_run(run_id: str) -> bool:
+    """Delete a run record and its stage logs. Returns True if a row was removed."""
+    conn = get_connection()
+    with conn:
+        conn.execute("DELETE FROM stage_logs WHERE run_id = ?", (run_id,))
+        cursor = conn.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+    conn.close()
+    return cursor.rowcount > 0
+
+
+def get_stale_pending_run_ids(max_age_hours: int = 2) -> list[str]:
+    """Return run_ids for pending runs older than max_age_hours."""
+    cutoff = (datetime.now(TAIPEI_TZ) - timedelta(hours=max_age_hours)).replace(microsecond=0).isoformat()
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT run_id FROM runs WHERE status = 'pending' AND created_at < ?",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+    return [r["run_id"] for r in rows]
+
+
+def delete_runs(run_ids: list[str]) -> int:
+    """Bulk-delete runs and their stage logs. Returns count removed."""
+    if not run_ids:
+        return 0
+    placeholders = ",".join("?" * len(run_ids))
+    conn = get_connection()
+    with conn:
+        conn.execute(f"DELETE FROM stage_logs WHERE run_id IN ({placeholders})", run_ids)
+        cursor = conn.execute(f"DELETE FROM runs WHERE run_id IN ({placeholders})", run_ids)
+    conn.close()
+    return cursor.rowcount
+
+
 def get_stage_logs(run_id: str) -> list[dict]:
     """取得指定 run 的所有 stage logs，依建立時間排序。"""
     conn = get_connection()
