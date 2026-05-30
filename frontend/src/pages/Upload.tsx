@@ -117,29 +117,31 @@ export default function Upload() {
 
   const modules = parseResult?.modules ?? []
   return (
-    <div className="eda-container eda-narrow">
+    <div className="eda-container">
       <div className="upload-hero">
-        <span className="section-kicker">Verilog Intake</span>
-        <h1 className="page-title">Upload a design and inspect the workflow.</h1>
-        <p className="page-subtitle">
-          Drop one or more Verilog files, preview parsed modules, choose analysis goals, then launch the EDA pipeline.
-        </p>
-      </div>
+        <div>
+          <span className="section-kicker">Verilog Intake</span>
+          <h1 className="page-title">Upload a design and inspect the workflow.</h1>
+          <p className="page-subtitle">
+            Drop one or more Verilog files, preview parsed modules, choose analysis goals, then launch the EDA pipeline.
+          </p>
+        </div>
 
-      <div className="upload-progress">
-        <div className="upload-stepper" aria-label="Upload progress">
-          {UPLOAD_STEPS.map((item, index) => {
-            const stepNumber = index + 1
-            const status = stepNumber < step ? 'complete' : stepNumber === step ? 'current' : 'upcoming'
-            return (
-              <div key={item.label} className={`upload-step ${status}`}>
-                <span className="upload-step-mark">
-                  <span>{stepNumber}</span>
-                </span>
-                <span className="upload-step-label">{item.label}</span>
-              </div>
-            )
-          })}
+        <div className="upload-progress">
+          <div className="upload-stepper" aria-label="Upload progress">
+            {UPLOAD_STEPS.map((item, index) => {
+              const stepNumber = index + 1
+              const status = stepNumber < step ? 'complete' : stepNumber === step ? 'current' : 'upcoming'
+              return (
+                <div key={item.label} className={`upload-step ${status}`}>
+                  <span className="upload-step-mark">
+                    <span>{stepNumber}</span>
+                  </span>
+                  <span className="upload-step-label">{item.label}</span>
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
 

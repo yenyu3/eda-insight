@@ -297,6 +297,40 @@ DAG 資訊：{json.dumps(dag_result, ensure_ascii=False)[:1500]}"""
     # 內部工具方法
     # ------------------------------------------------------------------
 
+    def compare_tradeoff(self, version_a: dict, version_b: dict, diff: dict, recommended: str | None) -> str:
+        """
+        Generate an AI-backed tradeoff analysis for two completed runs.
+        Falls back to a deterministic summary when mock mode is enabled or the provider fails.
+        """
+        fallback = _fallback_compare_tradeoff(version_a, version_b, recommended)
+        if self._mock:
+            return fallback
+
+        payload = {
+            "version_a": _compact_compare_version(version_a),
+            "version_b": _compact_compare_version(version_b),
+            "diff": diff,
+            "recommended": recommended,
+        }
+        prompt = f"""You are an EDA comparison assistant. Compare two Verilog analysis runs using only the provided metrics.
+
+Write a concise tradeoff analysis in 2-4 sentences. Mention:
+1. Which version is recommended, if any, and why.
+2. Resource tradeoffs from cell count, wire count, flip-flops.
+3. Timing tradeoffs from critical path and slack when available.
+4. Correctness/simulation caveats when available.
+
+Do not invent missing measurements. Avoid markdown tables.
+
+Comparison JSON:
+{json.dumps(payload, ensure_ascii=False)[:3500]}"""
+
+        try:
+            text = self._complete(prompt, max_tokens=512).strip()
+            return text or fallback
+        except Exception:
+            return fallback
+
     def _stream(self, prompt: str) -> Generator[str, None, None]:
         """執行 streaming 呼叫，yield 每個文字片段。"""
         if self.provider == "gemini":
@@ -347,6 +381,35 @@ def _mock_stream(text: str) -> Generator[str, None, None]:
     """回傳假串流資料，每次 yield 一個詞（以空格分割）。"""
     for word in text.split():
         yield word + " "
+
+
+# ---------- Compare helpers ----------
+
+def _compact_compare_version(version: dict) -> dict:
+    keys = (
+        "filename",
+        "sim_passed",
+        "warning_count",
+        "cell_count",
+        "wire_count",
+        "flip_flop_count",
+        "critical_path_ns",
+        "slack_ns",
+    )
+    return {key: version.get(key) for key in keys}
+
+
+def _fallback_compare_tradeoff(a: dict, b: dict, recommended: str | None) -> str:
+    picked = a if recommended == "a" else b if recommended == "b" else None
+    if picked:
+        reasons = []
+        if a.get("sim_passed") is False or b.get("sim_passed") is False:
+            reasons.append("simulation correctness")
+        if a.get("cell_count") is not None and b.get("cell_count") is not None:
+            reasons.append("cell-count efficiency")
+        reason_text = " and ".join(reasons) if reasons else "available comparison metrics"
+        return f"{picked['filename']} is the recommended choice based on {reason_text}."
+    return "The two runs are close on the available metrics. Review correctness, warnings, timing, slack, and waveform behavior before choosing one."
 
 
 # ---------- 測試入口 ----------

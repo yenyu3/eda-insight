@@ -19,7 +19,7 @@ export default function AIInsightPanel({ runId, enabled = true }: AIInsightPanel
   }
 
   return (
-    <div className="ai-box">
+    <div className="ai-box ai-box-plain">
       <AIFormattedText text={text} />
       {!done && text && (
         <motion.span

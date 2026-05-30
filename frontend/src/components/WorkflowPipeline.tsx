@@ -22,13 +22,13 @@ function StatusDot({ status }: { status: StageStatus }) {
   if (status === 'running') {
     return (
       <motion.span
-        className={`status-dot ${dotClass(status)}`}
-        animate={{ opacity: [1, 0.25, 1] }}
-        transition={{ duration: 1.2, repeat: Infinity }}
+        className={`status-dot pipeline-status-dot ${dotClass(status)}`}
+        animate={{ opacity: [1, 0.35, 1], scale: [1, 1.45, 1] }}
+        transition={{ duration: 1.15, repeat: Infinity, ease: 'easeInOut' }}
       />
     )
   }
-  return <span className={`status-dot ${dotClass(status)}`} />
+  return <span className={`status-dot pipeline-status-dot ${dotClass(status)}`} />
 }
 
 interface WorkflowPipelineProps {
@@ -41,10 +41,18 @@ export default function WorkflowPipeline({ stages = [] }: WorkflowPipelineProps)
   }
 
   return (
-    <div>
-      {stages.map((stage) => (
-        <div key={stage.name} className="pipeline-row">
-          <StatusDot status={stage.status} />
+    <div className="pipeline-list">
+      {stages.map((stage, index) => (
+        <motion.div
+          key={stage.name}
+          className={`pipeline-row ${stage.status}`}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: index * 0.045, duration: 0.28, ease: 'easeOut' }}
+        >
+          <span className="pipeline-node">
+            <StatusDot status={stage.status} />
+          </span>
           <span className="flex-1 text-sm text-[var(--heading-color)]">
             {STAGE_LABELS[stage.name] ?? stage.name}
           </span>
@@ -52,7 +60,7 @@ export default function WorkflowPipeline({ stages = [] }: WorkflowPipelineProps)
             <span className="text-xs text-black/40">{stage.duration_ms}ms</span>
           )}
           <span className="tag">{stage.status}</span>
-        </div>
+        </motion.div>
       ))}
     </div>
   )

@@ -127,28 +127,28 @@ export default function Analysis() {
         </div>
       </div>
 
-      <div className="surface-card panel mb-5">
-        <div className="mb-4 flex items-center justify-between gap-4">
-          <h2 className="panel-title mb-0">Pipeline</h2>
-          <span className="text-xs text-black/40">{doneStages} / {stages.length || 0} complete</span>
-        </div>
-        <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-black/5">
-          <div className="h-full rounded-full bg-[var(--accent-color)] transition-all" style={{ width: `${progressPct}%` }} />
-        </div>
-        <WorkflowPipeline stages={stages} />
-      </div>
+      <div className="analysis-layout">
+        <aside className="analysis-sidebar" aria-label="Pipeline progress">
+          <div className={`surface-card panel pipeline-card ${isDone ? 'settled' : 'running'}`}>
+            <div className="pipeline-card-head">
+              <div>
+                <h2 className="panel-title mb-0">Pipeline</h2>
+                <p className="pipeline-subtitle">EDA workflow progress</p>
+              </div>
+              <span className="pipeline-percent">{progressPct}%</span>
+            </div>
+            <div className="pipeline-progress" aria-label={`${progressPct}% complete`}>
+              <div className="pipeline-progress-fill" style={{ width: `${progressPct}%` }} />
+            </div>
+            <div className="pipeline-meta">
+              <span>{doneStages} / {stages.length || 0} complete</span>
+              <span>{status?.overall ?? 'pending'}</span>
+            </div>
+            <WorkflowPipeline stages={stages} />
+          </div>
+        </aside>
 
-      <section className="surface-card panel mb-5">
-        <h2 className="panel-title">Live Log</h2>
-        <LogViewer
-          stages={logsData?.logs ?? []}
-          loading={logsLoading}
-          error={logsError instanceof Error ? logsError.message : null}
-        />
-      </section>
-
-      {view === 'tech' && (
-        <div className="space-y-5">
+        <div className="analysis-content">
           <section className="surface-card panel">
             <h2 className="panel-title">Run Summary</h2>
             <div className="grid-metrics">
@@ -159,92 +159,107 @@ export default function Analysis() {
           </section>
 
           <section className="surface-card panel">
-            <h2 className="panel-title">Synthesis Metrics</h2>
-            <div className="grid-metrics">
-              <MetricCard label="Cell Count" value={synth.cell_count} />
-              <MetricCard label="Wire Count" value={synth.wire_count} />
-              <MetricCard label="Flip-Flops" value={synth.flip_flop_count} />
-              <MetricCard label="Critical Path" value={synth.critical_path_ns} unit="ns" />
-              <MetricCard label="Slack" value={synth.slack_ns} unit="ns" />
-              <MetricCard label="Area" value={synth.area_estimate} />
-            </div>
+            <h2 className="panel-title">Live Log</h2>
+            <LogViewer
+              stages={logsData?.logs ?? []}
+              loading={logsLoading}
+              error={logsError instanceof Error ? logsError.message : null}
+            />
           </section>
 
-          {result?.waveform?.signals?.length ? (
+          {view === 'ai' && (
             <section className="surface-card panel">
-              <h2 className="panel-title">Waveform</h2>
-              <WaveformChart waveform={result.waveform} />
-            </section>
-          ) : isDone && (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Waveform</h2>
-              <p className="text-sm text-black/45">No waveform data was produced for this run.</p>
+              <h2 className="panel-title">AI Log Interpretation</h2>
+              <AIInsightPanel runId={runId} enabled={true} />
             </section>
           )}
 
-          {(result?.dependency_graph?.nodes?.length ?? 0) > 0 ? (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Dependency Graph</h2>
-              <DependencyGraph data={result?.dependency_graph} />
-            </section>
-          ) : isDone && (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Dependency Graph</h2>
-              <p className="text-sm text-black/45">No module dependency graph is available.</p>
-            </section>
+          {view === 'tech' && (
+            <>
+              <section className="surface-card panel">
+                <h2 className="panel-title">Synthesis Metrics</h2>
+                <div className="grid-metrics">
+                  <MetricCard label="Cell Count" value={synth.cell_count} />
+                  <MetricCard label="Wire Count" value={synth.wire_count} />
+                  <MetricCard label="Flip-Flops" value={synth.flip_flop_count} />
+                  <MetricCard label="Critical Path" value={synth.critical_path_ns} unit="ns" />
+                  <MetricCard label="Slack" value={synth.slack_ns} unit="ns" />
+                  <MetricCard label="Area" value={synth.area_estimate} />
+                </div>
+              </section>
+
+              {isDone && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Logic Flowchart</h2>
+                  {result?.flowchart
+                    ? <LogicFlowchart data={result.flowchart} />
+                    : <p className="text-sm text-black/45">No flowchart data available for this design.</p>
+                  }
+                </section>
+              )}
+
+              {result?.waveform?.signals?.length ? (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Waveform</h2>
+                  <WaveformChart waveform={result.waveform} />
+                </section>
+              ) : isDone && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Waveform</h2>
+                  <p className="text-sm text-black/45">No waveform data was produced for this run.</p>
+                </section>
+              )}
+
+              {(result?.dependency_graph?.nodes?.length ?? 0) > 0 ? (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Dependency Graph</h2>
+                  <DependencyGraph data={result?.dependency_graph} />
+                </section>
+              ) : isDone && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Dependency Graph</h2>
+                  <p className="text-sm text-black/45">No module dependency graph is available.</p>
+                </section>
+              )}
+            </>
           )}
 
-          {isDone && (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Logic Flowchart</h2>
-              {result?.flowchart
-                ? <LogicFlowchart data={result.flowchart} />
-                : <p className="text-sm text-black/45">No flowchart data available for this design.</p>
-              }
-            </section>
+          {view === 'ai' && (
+            <>
+              {result?.risk_scores && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Risk Scores</h2>
+                  <RiskPanel riskScores={result.risk_scores} />
+                </section>
+              )}
+
+              {result?.bottleneck_analysis && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Bottleneck Analysis</h2>
+                  <div className="ai-box ai-box-plain min-h-0 space-y-4">
+                    <div className="ai-section">
+                      <h3>Nodes</h3>
+                      <p>
+                        {result.bottleneck_analysis.bottlenecks.length
+                          ? result.bottleneck_analysis.bottlenecks.join(', ')
+                          : 'None'}
+                      </p>
+                    </div>
+                    <div className="ai-section">
+                      <h3>Impact</h3>
+                      <AIFormattedText text={result.bottleneck_analysis.impact || 'No impact details available.'} />
+                    </div>
+                    <div className="ai-section">
+                      <h3>Suggestions</h3>
+                      <AIFormattedText text={result.bottleneck_analysis.suggestions || 'No suggestions available.'} />
+                    </div>
+                  </div>
+                </section>
+              )}
+            </>
           )}
         </div>
-      )}
-
-      {view === 'ai' && (
-        <div className="space-y-5">
-          <section className="surface-card panel">
-            <h2 className="panel-title">AI Log Interpretation</h2>
-            <AIInsightPanel runId={runId} enabled={true} />
-          </section>
-
-          {result?.risk_scores && (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Risk Scores</h2>
-              <RiskPanel riskScores={result.risk_scores} />
-            </section>
-          )}
-
-          {result?.bottleneck_analysis && (
-            <section className="surface-card panel">
-              <h2 className="panel-title">Bottleneck Analysis</h2>
-              <div className="ai-box min-h-0 space-y-4">
-                <div className="ai-section">
-                  <h3>Nodes</h3>
-                  <p>
-                    {result.bottleneck_analysis.bottlenecks.length
-                      ? result.bottleneck_analysis.bottlenecks.join(', ')
-                      : 'None'}
-                  </p>
-                </div>
-                <div className="ai-section">
-                  <h3>Impact</h3>
-                  <AIFormattedText text={result.bottleneck_analysis.impact || 'No impact details available.'} />
-                </div>
-                <div className="ai-section">
-                  <h3>Suggestions</h3>
-                  <AIFormattedText text={result.bottleneck_analysis.suggestions || 'No suggestions available.'} />
-                </div>
-              </div>
-            </section>
-          )}
-        </div>
-      )}
+      </div>
     </div>
   )
 }

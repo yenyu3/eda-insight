@@ -27,6 +27,7 @@ export default function WaveformChart({ waveform }: WaveformChartProps) {
   })
 
   const layout = {
+    autosize: true,
     height: 260,
     margin: { t: 10, b: 40, l: 50, r: 10 },
     paper_bgcolor: 'transparent',
@@ -39,11 +40,14 @@ export default function WaveformChart({ waveform }: WaveformChartProps) {
   }
 
   return (
-    <Plot
-      data={traces as Partial<PlotData>[]}
-      layout={layout as Partial<Layout>}
-      config={{ displayModeBar: false, responsive: true }}
-      style={{ width: '100%' }}
-    />
+    <div className="waveform-chart">
+      <Plot
+        data={traces as Partial<PlotData>[]}
+        layout={layout as Partial<Layout>}
+        config={{ displayModeBar: false, responsive: true }}
+        useResizeHandler
+        style={{ width: '100%', height: '260px' }}
+      />
+    </div>
   )
 }
