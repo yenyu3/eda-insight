@@ -59,6 +59,7 @@ def health_check():
             "/api/result/<run_id>",
             "/api/logs/<run_id>",
             "/api/stream/<run_id>",
+            "/api/insight/<run_id>",
             "/api/compare",
         ],
     })
@@ -266,6 +267,41 @@ def stream(run_id: str):
 
             latest = db_manager.get_run(run_id) or run
             parser_result = latest.get("parser_result") or {}
+            engine = get_ai_engine()
+            for chunk in engine.verilog_insight(parser_result):
+                yield _sse({"type": "text", "content": chunk})
+            yield _sse({"type": "done"})
+        except Exception as e:
+            yield _sse({"type": "error", "content": str(e)})
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ------------------------------------------------------------------
+# GET /api/insight/<run_id>  — Upload Step 2 AI preview (SSE)
+# ------------------------------------------------------------------
+
+@app.route("/api/insight/<run_id>", methods=["GET"])
+def insight_stream(run_id: str):
+    """
+    立即串流 verilog_insight，供 Upload Step 2 在 pipeline 啟動前顯示 AI 預覽。
+    不等待 pipeline 完成，直接用 parser_result 呼叫 AI。
+    """
+    run = db_manager.get_run(run_id)
+    if not run:
+        return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
+
+    parser_result = run.get("parser_result") or {}
+
+    def generate():
+        try:
             engine = get_ai_engine()
             for chunk in engine.verilog_insight(parser_result):
                 yield _sse({"type": "text", "content": chunk})
