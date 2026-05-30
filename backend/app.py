@@ -401,14 +401,15 @@ def compare():
     ver_a = extract_ppa(run_a)
     ver_b = extract_ppa(run_b)
     diff = _compute_diff(ver_a, ver_b)
+    recommended = _recommend_version(ver_a, ver_b)
 
     return jsonify({
         "version_a": ver_a,
         "version_b": ver_b,
         "diff": diff,
         "complexity_scores": _complexity_scores(ver_a, ver_b),
-        "recommended": _recommend_version(ver_a, ver_b),
-        "ai_tradeoff": _compare_tradeoff(ver_a, ver_b),
+        "recommended": recommended,
+        "ai_tradeoff": _compare_tradeoff(ver_a, ver_b, diff, recommended),
     })
 
 
@@ -454,13 +455,15 @@ def _recommend_version(a: dict, b: dict) -> str | None:
     return None
 
 
-def _compare_tradeoff(a: dict, b: dict) -> str:
-    rec = _recommend_version(a, b)
-    if rec == "a":
-        return f"{a['filename']} is the leaner choice for this comparison based on available correctness and cell-count data."
-    if rec == "b":
-        return f"{b['filename']} is the leaner choice for this comparison based on available correctness and cell-count data."
-    return "The two runs are close on the available metrics. Review function, warnings, and waveform behavior before choosing one."
+def _compare_tradeoff(a: dict, b: dict, diff: dict, recommended: str | None) -> str:
+    try:
+        return get_ai_engine().compare_tradeoff(a, b, diff, recommended)
+    except Exception:
+        if recommended == "a":
+            return f"{a['filename']} is the recommended choice based on available correctness and cell-count data."
+        if recommended == "b":
+            return f"{b['filename']} is the recommended choice based on available correctness and cell-count data."
+        return "The two runs are close on the available metrics. Review function, warnings, and waveform behavior before choosing one."
 
 
 def _simulation_diff(a: dict, b: dict) -> dict | None:

@@ -41,12 +41,16 @@ function valueTone(value: number | boolean | null | undefined, diff: DiffEntry |
   return diff.better ? 'text-emerald-700' : 'text-red-700'
 }
 
-function SkeletonBlock() {
+function CompareLoading() {
   return (
-    <div className="surface-card panel space-y-4">
-      {[0, 1, 2].map((row) => (
-        <div key={row} className="h-12 animate-pulse rounded-lg bg-black/[0.04]" />
-      ))}
+    <div className="surface-card panel compare-loading">
+      <span className="compare-loading-spinner" aria-hidden="true" />
+      <div>
+        <h2 className="panel-title mb-2">Comparing Runs</h2>
+        <p className="text-sm leading-relaxed text-black/55">
+          Reading metrics, calculating diffs, and preparing the tradeoff analysis.
+        </p>
+      </div>
     </div>
   )
 }
@@ -212,6 +216,65 @@ function VerdictCard({
   )
 }
 
+function buildVerdictCards(cmp: CompareResult) {
+  const aCells = cmp.version_a.cell_count
+  const bCells = cmp.version_b.cell_count
+  const aIsLeaner = aCells != null && bCells != null ? aCells <= bCells : cmp.recommended === 'a'
+  const bIsLeaner = aCells != null && bCells != null ? bCells <= aCells : cmp.recommended === 'b'
+
+  function resourceText(side: 'a' | 'b') {
+    const version = side === 'a' ? cmp.version_a : cmp.version_b
+    const other = side === 'a' ? cmp.version_b : cmp.version_a
+    const cellText = `cells ${formatMetric(version.cell_count)} vs ${formatMetric(other.cell_count)}`
+    const timing = version.critical_path_ns != null
+      ? `critical path ${formatMetric(version.critical_path_ns, 'ns')}`
+      : 'critical path N/A'
+    const slack = version.slack_ns != null
+      ? `slack ${formatMetric(version.slack_ns, 'ns')}`
+      : 'slack N/A'
+    const sim = version.sim_passed == null
+      ? 'simulation status unknown'
+      : version.sim_passed ? 'simulation passed' : 'simulation failed'
+    return `${cellText}; ${timing}; ${slack}; ${sim}.`
+  }
+
+  function title(side: 'a' | 'b') {
+    const version = side === 'a' ? cmp.version_a : cmp.version_b
+    const isRecommended = cmp.recommended === side
+    const isLeaner = side === 'a' ? aIsLeaner : bIsLeaner
+    if (isRecommended) return `${version.filename} recommended`
+    return `${version.filename} ${isLeaner ? 'leaner profile' : 'larger profile'}`
+  }
+
+  function description(side: 'a' | 'b') {
+    const isRecommended = cmp.recommended === side
+    const isLeaner = side === 'a' ? aIsLeaner : bIsLeaner
+    const prefix = isRecommended
+      ? 'Best match under the current comparison rule.'
+      : isLeaner
+        ? 'Resource-leaning alternative.'
+        : 'Higher-resource alternative.'
+    return `${prefix} ${resourceText(side)}`
+  }
+
+  return [
+    {
+      side: 'a' as const,
+      title: title('a'),
+      description: description('a'),
+      active: cmp.recommended === 'a',
+      icon: aIsLeaner ? 'leaner' as const : 'capable' as const,
+    },
+    {
+      side: 'b' as const,
+      title: title('b'),
+      description: description('b'),
+      active: cmp.recommended === 'b',
+      icon: bIsLeaner ? 'leaner' as const : 'capable' as const,
+    },
+  ]
+}
+
 function statusDotClass(status: string) {
   if (status === 'done') return 'bg-emerald-500'
   if (status === 'error') return 'bg-red-500'
@@ -327,7 +390,7 @@ export default function Compare() {
     queryFn: () => fetch('/api/history').then((r) => { if (!r.ok) throw new Error(`history fetch failed: ${r.status}`); return r.json() as Promise<HistoryData> }),
   })
 
-  const { data: cmp, isLoading } = useQuery<CompareResult>({
+  const { data: cmp, isFetching } = useQuery<CompareResult>({
     queryKey: ['compare', runIdA, runIdB],
     queryFn: () =>
       fetch('/api/compare', {
@@ -340,6 +403,7 @@ export default function Compare() {
 
   const runs = history?.runs?.filter((r) => r.status !== 'pending') ?? []
   const recommended = cmp?.recommended === 'a' ? cmp.version_a : cmp?.recommended === 'b' ? cmp.version_b : null
+  const verdictCards = cmp ? buildVerdictCards(cmp) : []
 
   return (
     <div className="eda-container">
@@ -376,18 +440,19 @@ export default function Compare() {
           <div className="flex items-center md:self-stretch">
             <button
               onClick={() => setSubmitted(true)}
-              disabled={!runIdA || !runIdB || runIdA === runIdB}
+              disabled={!runIdA || !runIdB || runIdA === runIdB || isFetching}
               className="btn-primary h-11 px-8"
             >
-              Compare
+              {isFetching && <span className="compare-button-spinner" aria-hidden="true" />}
+              {isFetching ? 'Comparing...' : 'Compare'}
             </button>
           </div>
         </div>
       </section>
 
-      {isLoading && <SkeletonBlock />}
+      {isFetching && <CompareLoading />}
 
-      {cmp && !cmp.error && (
+      {cmp && !cmp.error && !isFetching && (
         <div className="space-y-5">
           <div className="flex justify-end">
             <div className="segmented">
@@ -445,7 +510,7 @@ export default function Compare() {
           {view === 'visual' && (
             <section className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
               <div className="surface-card panel">
-                <h2 className="panel-title">Design Profile — Radar</h2>
+                <h2 className="panel-title">Design Profile Radar</h2>
                 <p className="mb-6 text-sm text-black/55">Smaller shape means a leaner design.</p>
                 <RadarChart cmp={cmp} />
               </div>
@@ -472,18 +537,15 @@ export default function Compare() {
           <section className="surface-card panel">
             <h2 className="panel-title mb-5">Which One to Pick?</h2>
             <div className="space-y-4">
-              <VerdictCard
-                title={`${cmp.version_a.filename} — leaner`}
-                description={`Fewer cells (${formatMetric(cmp.version_a.cell_count)} vs ${formatMetric(cmp.version_b.cell_count)}), simpler structure. Choose this if resource efficiency matters.`}
-                active={cmp.recommended === 'a'}
-                icon="leaner"
-              />
-              <VerdictCard
-                title={`${cmp.version_b.filename} — more capable`}
-                description="Handles the larger design profile. Higher resource use can be expected when the design is doing more work."
-                active={cmp.recommended === 'b'}
-                icon="capable"
-              />
+              {verdictCards.map((card) => (
+                <VerdictCard
+                  key={card.side}
+                  title={card.title}
+                  description={card.description}
+                  active={card.active}
+                  icon={card.icon}
+                />
+              ))}
               {!recommended && (
                 <p className="text-sm text-black/55">No clear recommendation from the available metrics.</p>
               )}

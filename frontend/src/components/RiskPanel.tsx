@@ -1,22 +1,30 @@
 import type { RiskScores } from '../types'
 
-function RiskBar({ label, score }: { label: string; score: number | undefined }) {
-  const pct = score != null ? (score / 10) * 100 : 0
-  const color =
-    score == null ? 'bg-gray-300'
-    : score >= 7 ? 'bg-red-500'
-    : score >= 4 ? 'bg-amber-400'
-    : 'bg-emerald-500'
+function formatScore(score: number | undefined) {
+  if (score == null) return 'N/A'
+  return Number.isInteger(score) ? score.toFixed(0) : score.toFixed(1)
+}
+
+function RiskGauge({ label, score }: { label: string; score: number | undefined }) {
+  const pct = score != null ? Math.max(0, Math.min(score, 10)) * 10 : 0
+  const tone =
+    score == null ? 'neutral'
+    : score >= 7 ? 'high'
+    : score >= 4 ? 'medium'
+    : 'low'
 
   return (
-    <div className="mb-4">
-      <div className="mb-2 flex justify-between text-xs text-black/55">
-        <span className="font-medium">{label}</span>
-        <span>{score != null ? score.toFixed(1) : 'N/A'}</span>
+    <div className={`risk-gauge-card ${tone}`}>
+      <div
+        className="risk-gauge"
+        style={{ '--risk-progress': `${pct}%` } as React.CSSProperties}
+        aria-label={`${label}: ${formatScore(score)} out of 10`}
+      >
+        <div className="risk-gauge-inner">
+          <span>{formatScore(score)}</span>
+        </div>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-black/10">
-        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
-      </div>
+      <p className="risk-gauge-label">{label}</p>
     </div>
   )
 }
@@ -32,11 +40,13 @@ export default function RiskPanel({ riskScores }: RiskPanelProps) {
 
   return (
     <div>
-      <RiskBar label="Timing Risk" score={riskScores.timing_risk ?? riskScores.timing} />
-      <RiskBar label="Area Risk" score={riskScores.area_risk ?? riskScores.area} />
-      <RiskBar label="Function Risk" score={riskScores.function_risk ?? riskScores.function} />
+      <div className="risk-gauge-grid">
+        <RiskGauge label="Timing Risk" score={riskScores.timing_risk ?? riskScores.timing} />
+        <RiskGauge label="Area Risk" score={riskScores.area_risk ?? riskScores.area} />
+        <RiskGauge label="Function Risk" score={riskScores.function_risk ?? riskScores.function} />
+      </div>
       {riskScores.summary && (
-        <p className="mt-3 text-sm leading-relaxed text-black/60">{riskScores.summary}</p>
+        <p className="risk-summary">{riskScores.summary}</p>
       )}
     </div>
   )
