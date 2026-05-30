@@ -46,6 +46,25 @@ export default function Upload() {
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
+  // Track the latest pending runId and whether the pipeline was started,
+  // so we can clean up abandoned uploads on unmount or Re-select.
+  const pendingRunIdRef = useRef<string | null>(null)
+  const pipelineStartedRef = useRef(false)
+
+  useEffect(() => {
+    if (!pipelineStartedRef.current) {
+      pendingRunIdRef.current = runId
+    }
+  }, [runId])
+
+  useEffect(() => {
+    return () => {
+      if (pendingRunIdRef.current) {
+        fetch(`/api/run/${pendingRunIdRef.current}`, { method: 'DELETE' }).catch(() => {})
+      }
+    }
+  }, [])
+
   useEffect(() => {
     if (step !== 2 || !runId) return
     setAiText('')
@@ -110,6 +129,8 @@ export default function Upload() {
         body: JSON.stringify({ run_id: runId, goals: selectedGoals }),
       })
       if (!res.ok) throw new Error(`Analysis failed to start with status ${res.status}`)
+      pipelineStartedRef.current = true
+      pendingRunIdRef.current = null
       window.localStorage.setItem('eda-insight:last-run-id', runId)
       navigate(`/analysis/${runId}`)
     } catch (e) {
@@ -120,6 +141,10 @@ export default function Upload() {
   }
 
   function resetSelection() {
+    if (runId) {
+      fetch(`/api/run/${runId}`, { method: 'DELETE' }).catch(() => {})
+      pendingRunIdRef.current = null
+    }
     setStep(1)
     setFiles([])
     setPreview('')

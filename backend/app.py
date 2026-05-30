@@ -32,7 +32,21 @@ CORS(app, origins=["http://localhost:5173"])
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads", "runs")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+def _cleanup_stale_pending_runs() -> None:
+    """On startup, remove pending runs older than 2 hours (tab-close edge cases)."""
+    stale_ids = db_manager.get_stale_pending_run_ids(max_age_hours=2)
+    for run_id in stale_ids:
+        run_dir = os.path.join(UPLOAD_DIR, run_id)
+        if os.path.exists(run_dir):
+            shutil.rmtree(run_dir, ignore_errors=True)
+    deleted = db_manager.delete_runs(stale_ids)
+    if deleted:
+        print(f"[startup] Cleaned up {deleted} stale pending run(s)")
+
+
 db_manager.init_db()
+_cleanup_stale_pending_runs()
 
 # 延遲初始化 AIEngine（避免啟動時因 API key 缺失崩潰）
 _ai_engine: AIEngine | None = None
@@ -54,7 +68,8 @@ def health_check():
         "endpoints": [
             "/api/history",
             "/api/upload",
-            "/api/run",
+            "POST /api/run",
+            "DELETE /api/run/<run_id>",
             "/api/status/<run_id>",
             "/api/result/<run_id>",
             "/api/logs/<run_id>",
@@ -169,6 +184,32 @@ def run():
     t.start()
 
     return jsonify({"run_id": run_id, "status": "started"}), 202
+
+
+# ------------------------------------------------------------------
+# DELETE /api/run/<run_id>
+# ------------------------------------------------------------------
+
+@app.route("/api/run/<run_id>", methods=["DELETE"])
+def delete_run(run_id: str):
+    """
+    Delete a pending run record and its uploaded files.
+    Only allowed while status is 'pending' (not started).
+    Called by the frontend when the user abandons an upload.
+    """
+    run = db_manager.get_run(run_id)
+    if not run:
+        return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
+
+    if run.get("status") != "pending":
+        return jsonify({"error": "只能刪除 pending 狀態的 run", "code": "INVALID_STATUS"}), 409
+
+    run_dir = os.path.join(UPLOAD_DIR, run_id)
+    if os.path.exists(run_dir):
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+    db_manager.delete_run(run_id)
+    return jsonify({"run_id": run_id, "deleted": True})
 
 
 # ------------------------------------------------------------------
