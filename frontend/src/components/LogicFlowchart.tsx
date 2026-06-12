@@ -262,26 +262,73 @@ function BlockFlow({ block, query }: { block: AlwaysBlock; query: string }) {
 function AssignSection({ assigns }: { assigns: FlowchartData['assign_blocks'] }) {
   if (!assigns.length) return null
   return (
-    <div className="mt-4">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-black/40">
-        Combinational Logic
-      </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+    <div className="mt-5">
+      <div style={{ marginBottom: 10, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+        <p className="text-xs font-semibold uppercase tracking-widest text-black/40">
+          Combinational Logic
+        </p>
+        <span style={{ fontSize: '0.72rem', color: 'rgba(0,0,0,0.42)', fontFamily: 'var(--nav-font, Poppins, sans-serif)' }}>
+          {assigns.length} assign{assigns.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
+        gap: 10,
+      }}>
         {assigns.map((a) => (
           <div key={a.id} style={{
             background: 'rgba(0,0,0,0.025)',
             border: '1px solid rgba(0,0,0,0.09)',
-            borderLeft: '3px solid #1D9E75',
             borderRadius: 12,
-            padding: '10px 14px',
-            minWidth: 140,
+            padding: 14,
+            minWidth: 0,
           }}>
-            <p style={{ fontSize: '0.68rem', color: 'rgba(0,0,0,0.4)', marginBottom: 2, fontFamily: 'var(--nav-font)' }}>
-              assign
-            </p>
-            <p style={{ fontFamily: 'var(--mono-font, "Roboto Mono", monospace)', fontSize: '0.82rem', color: '#0f1012' }}>
-              {a.output} = {a.expression}
-            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{
+                fontSize: '0.68rem',
+                color: 'rgba(0,0,0,0.46)',
+                fontFamily: 'var(--nav-font, Poppins, sans-serif)',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}>
+                assign
+              </span>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, auto) auto minmax(0, 1fr)',
+              alignItems: 'start',
+              gap: 8,
+              fontFamily: 'var(--mono-font, "Roboto Mono", monospace)',
+              fontSize: '0.82rem',
+              lineHeight: 1.55,
+              color: '#0f1012',
+            }}>
+              <code style={{
+                display: 'block',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                whiteSpace: 'normal',
+                fontFamily: 'inherit',
+                background: 'transparent',
+                fontWeight: 600,
+              }}>
+                {a.output}
+              </code>
+              <span style={{ color: 'rgba(0,0,0,0.36)' }}>=</span>
+              <code style={{
+                display: 'block',
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                whiteSpace: 'normal',
+                fontFamily: 'inherit',
+                background: 'transparent',
+              }}>
+                {a.expression}
+              </code>
+            </div>
           </div>
         ))}
       </div>
