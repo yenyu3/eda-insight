@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
+import LoadingState from '../components/LoadingState'
 import type { CompareResult, DiffEntry, HistoryData, RunRecord } from '../types'
 import { formatTaipeiDateTime } from '../utils/dateTime'
 
@@ -43,15 +44,11 @@ function valueTone(value: number | boolean | null | undefined, diff: DiffEntry |
 
 function CompareLoading() {
   return (
-    <div className="surface-card panel compare-loading">
-      <span className="compare-loading-spinner" aria-hidden="true" />
-      <div>
-        <h2 className="panel-title mb-2">Comparing Runs</h2>
-        <p className="text-sm leading-relaxed text-black/55">
-          Reading metrics, calculating diffs, and preparing the tradeoff analysis.
-        </p>
-      </div>
-    </div>
+    <LoadingState
+      className="surface-card panel compare-loading"
+      title="Comparing runs"
+      description="Reading metrics, calculating diffs, and preparing the AI tradeoff analysis."
+    />
   )
 }
 
@@ -385,12 +382,12 @@ export default function Compare() {
   const [submitted, setSubmitted] = useState(() => !!searchParams.get('a') && !!searchParams.get('b'))
   const [view, setView] = useState<ViewMode>('table')
 
-  const { data: history } = useQuery<HistoryData>({
+  const { data: history, isLoading: historyLoading, isError: historyError } = useQuery<HistoryData>({
     queryKey: ['history'],
     queryFn: () => fetch('/api/history').then((r) => { if (!r.ok) throw new Error(`history fetch failed: ${r.status}`); return r.json() as Promise<HistoryData> }),
   })
 
-  const { data: cmp, isFetching } = useQuery<CompareResult>({
+  const { data: cmp, isFetching, isError: compareError, error: compareErrorData } = useQuery<CompareResult>({
     queryKey: ['compare', runIdA, runIdB],
     queryFn: () =>
       fetch('/api/compare', {
@@ -418,6 +415,19 @@ export default function Compare() {
 
       <section className="surface-card panel mb-5">
         <h2 className="panel-title">Select Versions</h2>
+        {historyLoading && (
+          <LoadingState
+            compact
+            className="mb-4"
+            title="Loading completed runs"
+            description="The version selectors will be available as soon as history is loaded."
+          />
+        )}
+        {historyError && (
+          <p className="mb-4 text-sm text-red-600">
+            Failed to load completed runs. Please refresh or check the backend.
+          </p>
+        )}
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
           <RunSelect
             label="Version A"
@@ -451,6 +461,14 @@ export default function Compare() {
       </section>
 
       {isFetching && <CompareLoading />}
+
+      {compareError && !isFetching && (
+        <div className="surface-card panel">
+          <p className="text-sm text-red-600">
+            Failed to compare runs: {compareErrorData instanceof Error ? compareErrorData.message : 'Unknown error'}
+          </p>
+        </div>
+      )}
 
       {cmp && !cmp.error && !isFetching && (
         <div className="space-y-5">

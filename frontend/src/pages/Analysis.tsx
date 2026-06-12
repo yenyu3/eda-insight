@@ -11,6 +11,7 @@ import DependencyGraph from '../components/DependencyGraph'
 import LogViewer from '../components/LogViewer'
 import LogicFlowchart from '../components/LogicFlowchart'
 import AIFormattedText from '../components/AIFormattedText'
+import LoadingState from '../components/LoadingState'
 import type { AnalysisResult, Stage, StageLog, StageStatus } from '../types'
 
 type ViewMode = 'tech' | 'decision'
@@ -264,7 +265,7 @@ export default function Analysis() {
   const [view, setView] = useState<ViewMode>('tech')
   const [shareCopied, setShareCopied] = useState(false)
 
-  const { data: status, isError: statusError } = useRunStatus(runId)
+  const { data: status, isLoading: statusLoading, isError: statusError } = useRunStatus(runId)
   const isDone = status?.overall === 'done' || status?.overall === 'error'
 
   useEffect(() => {
@@ -283,7 +284,7 @@ export default function Analysis() {
     }
   }, [runId, statusError])
 
-  const { data: result } = useQuery<AnalysisResult>({
+  const { data: result, isLoading: resultLoading, isError: resultError, error: resultErrorData } = useQuery<AnalysisResult>({
     queryKey: ['result', runId],
     queryFn: () =>
       fetch(`/api/result/${runId}`).then((r) => {
@@ -357,7 +358,7 @@ export default function Analysis() {
           </p>
           <div className="mt-5 flex items-center gap-2">
             <span className={`status-dot ${statusClass(overallStatus)}`} />
-            <span className="tag">{status?.overall ?? 'pending'}</span>
+            <span className="tag">{statusLoading ? 'loading status' : status?.overall ?? 'pending'}</span>
             {runId && <span className="tag font-mono">{runId.slice(0, 8)}</span>}
             <button type="button" className="analysis-share-button" onClick={() => void shareRun()}>
               {shareCopied ? 'Link copied' : 'Share'}
@@ -393,10 +394,18 @@ export default function Analysis() {
               <div className="pipeline-progress-fill" style={{ width: `${progressPct}%` }} />
             </div>
             <div className="pipeline-meta">
-              <span>{doneStages} / {stages.length || 0} complete</span>
+              <span>{statusLoading ? 'Loading stages...' : `${doneStages} / ${stages.length || 0} complete`}</span>
               <span>{status?.overall ?? 'pending'}</span>
             </div>
-            <WorkflowPipeline stages={stages} />
+            {statusLoading ? (
+              <LoadingState
+                compact
+                title="Loading pipeline status"
+                description="Connecting to the backend run tracker."
+              />
+            ) : (
+              <WorkflowPipeline stages={stages} />
+            )}
           </div>
         </aside>
 
@@ -428,14 +437,32 @@ export default function Analysis() {
 
               <section className="surface-card panel">
                 <h2 className="panel-title">Synthesis Metrics</h2>
-                <div className="grid-metrics">
-                  <MetricCard label="Cell Count" value={synth.cell_count} />
-                  <MetricCard label="Wire Count" value={synth.wire_count} />
-                  <MetricCard label="Flip-Flops" value={synth.flip_flop_count} />
-                  <MetricCard label="Critical Path" value={synth.critical_path_ns} unit="ns" />
-                  <MetricCard label="Slack" value={synth.slack_ns} unit="ns" />
-                  <MetricCard label="Area" value={synth.area_estimate} />
-                </div>
+                {resultLoading ? (
+                  <LoadingState
+                    compact
+                    title="Loading final metrics"
+                    description="The pipeline finished; synthesis artifacts are being fetched."
+                  />
+                ) : resultError ? (
+                  <p className="text-sm text-red-600">
+                    Failed to load result metrics: {resultErrorData instanceof Error ? resultErrorData.message : 'Unknown error'}
+                  </p>
+                ) : !isDone ? (
+                  <LoadingState
+                    compact
+                    title="Waiting for synthesis results"
+                    description="Metrics will appear here after synthesis and analysis complete."
+                  />
+                ) : (
+                  <div className="grid-metrics">
+                    <MetricCard label="Cell Count" value={synth.cell_count} />
+                    <MetricCard label="Wire Count" value={synth.wire_count} />
+                    <MetricCard label="Flip-Flops" value={synth.flip_flop_count} />
+                    <MetricCard label="Critical Path" value={synth.critical_path_ns} unit="ns" />
+                    <MetricCard label="Slack" value={synth.slack_ns} unit="ns" />
+                    <MetricCard label="Area" value={synth.area_estimate} />
+                  </div>
+                )}
               </section>
 
               {isDone && (
@@ -534,6 +561,28 @@ export default function Analysis() {
               )}
 
               {/* 3. Risk Scores */}
+              {!isDone && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Decision Evidence</h2>
+                  <LoadingState
+                    compact
+                    title="Collecting decision evidence"
+                    description="Readiness, risks, bottlenecks, and AI review will update after the run completes."
+                  />
+                </section>
+              )}
+
+              {resultLoading && (
+                <section className="surface-card panel">
+                  <h2 className="panel-title">Final Results</h2>
+                  <LoadingState
+                    compact
+                    title="Loading completed analysis"
+                    description="Fetching risk scores, bottlenecks, and generated reports."
+                  />
+                </section>
+              )}
+
               {result?.risk_scores && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Risk Scores</h2>
@@ -544,7 +593,7 @@ export default function Analysis() {
               {/* 4. Evidence-based AI Review */}
               <section className="surface-card panel">
                 <h2 className="panel-title">AI Review</h2>
-                <AIInsightPanel runId={runId} enabled={true} />
+                <AIInsightPanel runId={runId} enabled={isDone && !resultLoading} />
               </section>
 
               {/* 5. Bottleneck Analysis */}

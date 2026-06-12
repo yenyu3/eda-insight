@@ -427,6 +427,60 @@ select {
   animation: compare-spin 0.9s linear infinite;
 }
 
+.loading-state {
+  min-height: 112px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.025);
+  color: rgba(0, 0, 0, 0.62);
+}
+
+.loading-state--compact {
+  min-height: 74px;
+  padding: 14px 16px;
+  gap: 13px;
+}
+
+.loading-state-spinner {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: compare-spin 0.9s linear infinite;
+}
+
+.loading-state--compact .loading-state-spinner {
+  width: 22px;
+  height: 22px;
+  flex-basis: 22px;
+  border-width: 2px;
+}
+
+.loading-state-copy {
+  min-width: 0;
+}
+
+.loading-state-title {
+  margin: 0;
+  color: var(--heading-color);
+  font-family: var(--nav-font);
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.loading-state-description {
+  margin: 4px 0 0;
+  color: rgba(0, 0, 0, 0.52);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
 @keyframes compare-spin {
   to {
     transform: rotate(360deg);
@@ -684,6 +738,24 @@ select {
   font-family: var(--heading-font);
   font-size: 1.25rem;
   font-weight: 300;
+}
+
+.drop-icon.loading {
+  border-style: solid;
+  animation: upload-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes upload-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(49, 49, 49, 0.12);
+    transform: scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(49, 49, 49, 0);
+    transform: scale(1.04);
+  }
 }
 
 .grid-metrics {

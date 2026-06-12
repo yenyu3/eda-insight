@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { useSSEStream } from '../hooks/useSSEStream'
 import AIFormattedText from './AIFormattedText'
+import LoadingState from './LoadingState'
 
 interface AIInsightPanelProps {
   runId: string | undefined
@@ -9,6 +10,16 @@ interface AIInsightPanelProps {
 
 export default function AIInsightPanel({ runId, enabled = true }: AIInsightPanelProps) {
   const { text, done, error } = useSSEStream(runId, enabled)
+
+  if (!enabled) {
+    return (
+      <LoadingState
+        compact
+        title="Waiting for analysis results"
+        description="AI review will start after the EDA pipeline has enough evidence."
+      />
+    )
+  }
 
   if (error) {
     return (
@@ -20,6 +31,13 @@ export default function AIInsightPanel({ runId, enabled = true }: AIInsightPanel
 
   return (
     <div className="ai-box ai-box-plain">
+      {!text && !done && (
+        <LoadingState
+          compact
+          title="Generating AI review"
+          description="The model is reading logs and metrics. This can take a moment."
+        />
+      )}
       <AIFormattedText text={text} />
       {!done && text && (
         <motion.span
