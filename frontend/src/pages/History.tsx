@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
+import LoadingState from '../components/LoadingState'
 import type { HistoryData } from '../types'
 import { formatTaipeiDateTime } from '../utils/dateTime'
 
@@ -14,7 +15,7 @@ function dotClass(status: string) {
 export default function History() {
   const [selected, setSelected] = useState<string[]>([])
   const navigate = useNavigate()
-  const { data, isLoading } = useQuery<HistoryData>({
+  const { data, isLoading, isError, error } = useQuery<HistoryData>({
     queryKey: ['history'],
     queryFn: () => fetch('/api/history').then((r) => { if (!r.ok) throw new Error(`history fetch failed: ${r.status}`); return r.json() as Promise<HistoryData> }),
   })
@@ -51,16 +52,27 @@ export default function History() {
       </div>
 
       <div className="surface-card overflow-hidden">
-        {isLoading && <p className="p-6 text-sm text-black/45">Loading...</p>}
+        {isLoading && (
+          <LoadingState
+            title="Loading run history"
+            description="Fetching previous analyses so you can reopen or compare them."
+          />
+        )}
 
-        {!isLoading && !runs.length && (
+        {isError && (
+          <p className="p-6 text-sm text-red-600">
+            Failed to load history: {error instanceof Error ? error.message : 'Unknown error'}
+          </p>
+        )}
+
+        {!isLoading && !isError && !runs.length && (
           <div className="p-6">
             <p className="text-sm text-black/45">No runs yet.</p>
             <Link to="/" className="btn-primary mt-4 inline-flex">Open upload</Link>
           </div>
         )}
 
-        {!isLoading && runs.map((run) => {
+        {!isLoading && !isError && runs.map((run) => {
           const checked = selectedSet.has(run.run_id)
           return (
             <div key={run.run_id} className={`history-row ${checked ? 'selected' : ''}`}>

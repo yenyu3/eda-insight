@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import AIFormattedText from '../components/AIFormattedText'
+import LoadingState from '../components/LoadingState'
 import type { ParserResult } from '../types'
 
 type UploadStep = 1 | 2 | 3
@@ -207,12 +208,14 @@ export default function Upload() {
           className={`drop-zone ${dragging ? 'dragging' : ''}`}
         >
           <div className="drop-zone-content">
-            <div className="drop-icon">.v</div>
+            <div className={`drop-icon ${uploading ? 'loading' : ''}`}>.v</div>
             <h2 className="text-xl font-light text-[var(--heading-color)]">
               {uploading ? 'Parsing files...' : 'Drop Verilog files here'}
             </h2>
             <p className="mt-4 text-sm text-black/50">
-              Include the design module and testbench when available.
+              {uploading
+                ? 'Uploading Verilog and extracting modules, ports, and lint findings.'
+                : 'Include the design module and testbench when available.'}
             </p>
           </div>
         </div>
@@ -269,7 +272,13 @@ export default function Upload() {
             <div className="rounded-xl border border-black/10 bg-black/[0.02] p-4 text-sm leading-relaxed text-black/65">
               {aiDone
                 ? <AIFormattedText text={aiText} emptyText="No analysis available." />
-                : 'Analyzing circuit…'
+                : (
+                  <LoadingState
+                    compact
+                    title="Analyzing circuit"
+                    description="AI is reviewing the parsed modules and lint context."
+                  />
+                )
               }
             </div>
           </div>
@@ -314,6 +323,14 @@ export default function Upload() {
               )
             })}
           </div>
+
+          {starting && (
+            <LoadingState
+              className="mt-5"
+              title="Starting EDA pipeline"
+              description="Creating the run plan and handing the selected goals to the backend."
+            />
+          )}
         </div>
       )}
 

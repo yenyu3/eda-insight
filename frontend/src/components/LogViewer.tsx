@@ -1,4 +1,5 @@
 import type { StageLog } from '../types'
+import LoadingState from './LoadingState'
 
 function colorLine(line: string): string {
   if (/\[✓\]|Passed|passed|done/i.test(line)) return 'text-emerald-600'
@@ -25,11 +26,23 @@ export default function LogViewer({ stages = [], error = null, loading = false }
   }
 
   if (loading && !lines.length) {
-    return <p className="text-xs text-gray-400 p-3">Loading logs...</p>
+    return (
+      <LoadingState
+        compact
+        title="Loading live logs"
+        description="Waiting for the backend to publish the first stage output."
+      />
+    )
   }
 
   if (!lines.length) {
-    return <p className="text-xs text-gray-400 p-3">Waiting for stage logs...</p>
+    return (
+      <LoadingState
+        compact
+        title="Waiting for stage logs"
+        description="The pipeline has started; logs will appear here as each tool reports back."
+      />
+    )
   }
 
   return (
