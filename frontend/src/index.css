@@ -377,6 +377,19 @@ select {
   flex: 0 0 auto;
 }
 
+.analysis-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.analysis-status-tag {
+  min-height: 30px;
+  padding: 5px 13px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .analysis-share-button {
   min-height: 26px;
   display: inline-flex;
@@ -399,6 +412,32 @@ select {
 .analysis-share-button:hover {
   background: #000000;
   transform: translateY(-1px);
+}
+
+.analysis-share-button--run {
+  min-height: 32px;
+  gap: 7px;
+  padding: 5px 14px;
+  font-size: 0.78rem;
+}
+
+.analysis-share-button--run.copied {
+  background: #047857;
+}
+
+.analysis-share-button--run.copied:hover {
+  background: #065f46;
+}
+
+.analysis-action-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
 }
 
 .compare-button-spinner {
@@ -1364,7 +1403,7 @@ select {
   }
 
   100% {
-    background-position: 220% 50%;
+    background-position: -220% 50%;
   }
 }
 

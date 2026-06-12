@@ -258,6 +258,23 @@ const verdictConfig: Record<VerdictType, { badge: string; dot: string; scoreColo
   'INSUFFICIENT DATA':{ badge: 'verdict-badge--insuff',  dot: 'bg-gray-400',    scoreColor: '#9ca3af' },
 }
 
+function LinkIcon() {
+  return (
+    <svg className="analysis-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.6 13.4a4.8 4.8 0 0 0 6.8 0l2-2a4.8 4.8 0 0 0-6.8-6.8l-1.1 1.1" />
+      <path d="M13.4 10.6a4.8 4.8 0 0 0-6.8 0l-2 2a4.8 4.8 0 0 0 6.8 6.8l1.1-1.1" />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg className="analysis-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────
 
 export default function Analysis() {
@@ -356,12 +373,16 @@ export default function Analysis() {
             Track each EDA stage, review synthesis metrics, inspect waveform output, and request
             AI-focused interpretation once the run completes.
           </p>
-          <div className="mt-5 flex items-center gap-2">
+          <div className="analysis-run-actions mt-5">
             <span className={`status-dot ${statusClass(overallStatus)}`} />
-            <span className="tag">{statusLoading ? 'loading status' : status?.overall ?? 'pending'}</span>
-            {runId && <span className="tag font-mono">{runId.slice(0, 8)}</span>}
-            <button type="button" className="analysis-share-button" onClick={() => void shareRun()}>
-              {shareCopied ? 'Link copied' : 'Share'}
+            <span className="tag analysis-status-tag">{statusLoading ? 'loading status' : status?.overall ?? 'pending'}</span>
+            <button
+              type="button"
+              className={`analysis-share-button analysis-share-button--run ${shareCopied ? 'copied' : ''}`}
+              onClick={() => void shareRun()}
+            >
+              {shareCopied ? <CheckIcon /> : <LinkIcon />}
+              {shareCopied ? 'Link copied' : 'Share Run'}
             </button>
           </div>
         </div>
