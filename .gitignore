@@ -20,6 +20,10 @@ backend/uploads/
 # Local assistant context
 *.md
 !README.md
+!PROJECT_ARCHITECTURE.md
 CLAUDE.md
 SETUP.md
 UI_SPEC.md
+
+# Local docs folder
+docs/
