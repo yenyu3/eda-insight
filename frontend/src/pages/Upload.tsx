@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import AIFormattedText from '../components/AIFormattedText'
 import LoadingState from '../components/LoadingState'
 import type { ParserResult } from '../types'
 
@@ -42,8 +41,6 @@ export default function Upload() {
   const [runId, setRunId] = useState<string | null>(null)
   const [selectedGoals, setSelectedGoals] = useState<string[]>(() => GOALS.map((goal) => goal.id))
   const [error, setError] = useState<string | null>(null)
-  const [aiText, setAiText] = useState('')
-  const [aiDone, setAiDone] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
@@ -65,22 +62,6 @@ export default function Upload() {
       }
     }
   }, [])
-
-  useEffect(() => {
-    if (step !== 2 || !runId) return
-    setAiText('')
-    setAiDone(false)
-    const es = new EventSource(`/api/insight/${runId}`)
-    es.onmessage = (e: MessageEvent<string>) => {
-      try {
-        const msg = JSON.parse(e.data) as { type: string; content?: string }
-        if (msg.type === 'text') setAiText((prev) => prev + (msg.content ?? ''))
-        else if (msg.type === 'done' || msg.type === 'error') { setAiDone(true); es.close() }
-      } catch { /* ignore malformed SSE frames */ }
-    }
-    es.onerror = () => { setAiDone(true); es.close() }
-    return () => { es.close() }
-  }, [step, runId])
 
   async function handleFiles(newFiles: FileList | null) {
     if (!newFiles) return
@@ -266,22 +247,6 @@ export default function Upload() {
               ))}
             </div>
           )}
-
-          <div className="mt-5">
-            <h2 className="panel-title">AI Circuit Analysis</h2>
-            <div className="rounded-xl border border-black/10 bg-black/[0.02] p-4 text-sm leading-relaxed text-black/65">
-              {aiDone
-                ? <AIFormattedText text={aiText} emptyText="No analysis available." />
-                : (
-                  <LoadingState
-                    compact
-                    title="Analyzing circuit"
-                    description="AI is reviewing the parsed modules and lint context."
-                  />
-                )
-              }
-            </div>
-          </div>
         </div>
       )}
 
