@@ -1,10 +1,3 @@
-"""
-services/workflow_service.py — EDA Pipeline 執行協調器
-
-整合所有 stage service，依序執行完整 pipeline 並維護整體狀態。
-設計為在背景 Thread 中執行（由 routes/upload.py 的 POST /api/run 觸發）。
-"""
-
 import os
 import json
 import time
@@ -57,7 +50,7 @@ def run_pipeline(
     # Stage 3: Simulate
     if "simulate" in pipeline:
         try:
-            run_simulation_stage(run_id, verilog_path, run_dir)
+            run_simulation_stage(run_id, run_dir)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             db_manager.upsert_stage_log(run_id, "simulation", "error", err)

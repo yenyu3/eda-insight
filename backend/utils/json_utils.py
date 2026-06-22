@@ -1,22 +1,23 @@
-"""utils/json_utils.py — JSON 解析與 mock 串流工具函式。"""
-
-import re
 import json
-from typing import Generator
+import re
+from typing import Any, Generator
 
 
-def safe_parse_json(text: str) -> dict:
-    """清除 AI 可能附加的 markdown fence 後解析 JSON；解析失敗回傳空 dict。"""
+def safe_parse_json(text: str) -> Any:
+    """清除 AI 可能附加的 markdown fence 後解析 JSON；解析失敗回傳空 dict。
+
+    回傳型別標為 Any，因為 json.loads 可解析出 dict / list / str / number。
+    """
     cleaned = text.strip()
-    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```$', '', cleaned)
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
         return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, TypeError):
         return {}
 
 
 def mock_stream(text: str) -> Generator[str, None, None]:
-    """回傳假串流資料，每次 yield 一個詞（以空格分割）。"""
-    for word in text.split():
-        yield word + " "
+    """回傳假串流資料，逐字元輸出以模擬 LLM streaming 效果（對中文更自然）。"""
+    for ch in text:
+        yield ch

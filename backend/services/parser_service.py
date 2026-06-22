@@ -1,11 +1,3 @@
-"""
-services/parser_service.py — Verilog 靜態解析 Service
-
-負責 verilog_parse stage 的完整生命週期：
-解析 → 更新 DB → 回傳結果。
-同時提供 flowchart 萃取功能。
-"""
-
 import os
 import time
 
@@ -20,26 +12,32 @@ def run_parse_stage(
     run_dir: str | None = None,
 ) -> dict:
     """
-    執行 verilog_parse stage：合併目錄內所有 .v 後靜態分析，並寫入 DB。
+    執行 verilog_parse stage。
 
-    Args:
-        run_id: 執行唯一識別碼
-        verilog_content: 主 .v 內容（run_dir 為 None 時使用）
-        run_dir: 若提供，合併目錄下所有 .v 檔案後再解析
-
-    Returns:
-        parse_verilog() 回傳的 dict
+    行為說明：
+    - 先以 verilog_content 作為預設輸入
+    - 若 run_dir 存在，則合併目錄內所有 .v 檔案後再解析
+    - 解析結果會寫回 runs.parser_result
+    - stage 狀態會寫入 stage_logs
     """
     t0 = time.time()
     db_manager.upsert_stage_log(run_id, "verilog_parse", "running", "")
 
     combined = verilog_content
+
+    # 若有 run_dir，則以目錄內所有 .v 檔合併內容進行解析
     if run_dir and os.path.isdir(run_dir):
         parts = []
         for fname in sorted(os.listdir(run_dir)):
             if fname.endswith(".v"):
-                with open(os.path.join(run_dir, fname), "r", encoding="utf-8", errors="replace") as f:
+                with open(
+                    os.path.join(run_dir, fname),
+                    "r",
+                    encoding="utf-8",
+                    errors="replace",
+                ) as f:
                     parts.append(f.read())
+
         if parts:
             combined = "\n".join(parts)
 
@@ -47,9 +45,13 @@ def run_parse_stage(
     duration = int((time.time() - t0) * 1000)
 
     db_manager.update_run_field(run_id, "parser_result", result)
+
+    modules = result.get("modules", [])
     db_manager.upsert_stage_log(
-        run_id, "verilog_parse", "done",
-        f"解析完成，找到 {len(result['modules'])} 個 module",
+        run_id,
+        "verilog_parse",
+        "done",
+        f"解析完成，找到 {len(modules)} 個 module",
         duration,
     )
     return result
@@ -59,10 +61,8 @@ def get_flowchart(verilog_content: str) -> dict:
     """
     從 Verilog 原始碼萃取 always block flowchart 與 assign 關係圖。
 
-    Args:
-        verilog_content: 不含 testbench 的 design Verilog 字串
-
-    Returns:
-        extract_flowchart() 回傳的 dict
+    注意：
+    - 這是一個獨立 helper，不是 parse stage 的必要流程
+    - 呼叫端可依需求決定是否展示 flowchart
     """
     return extract_flowchart(verilog_content)

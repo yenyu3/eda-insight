@@ -1,10 +1,3 @@
-"""
-flowchart_extractor.py — Verilog always block → flowchart JSON
-
-純 Python re 實作，不依賴外部工具或 AI。
-解析 always block 的 if/else/case 邏輯，輸出 ReactFlow 節點/邊格式。
-"""
-
 import re
 import json
 
@@ -12,6 +5,22 @@ import json
 # ─── 公開 API ────────────────────────────────────────────────────────────────
 
 def extract_flowchart(verilog_content: str) -> dict:
+    """
+    從 Verilog 原始碼抽取流程圖資訊。
+
+    回傳結構：
+    {
+        "always_blocks": [...],
+        "assign_blocks": [...],
+        "state_diagram": {...} | None,
+        "signal_dependency_map": {...},
+        "summary": str,
+        "detail_level": "complete" | "summarized",
+        "truncated": bool,
+        "truncation_reasons": [...],
+        "hidden_count": int
+    }
+    """
     ctx = _new_context()
     code = _strip_comments(verilog_content)
     always_blocks = _find_always_blocks(code, ctx)
@@ -21,8 +30,9 @@ def extract_flowchart(verilog_content: str) -> dict:
         "always_blocks": always_blocks,
         "assign_blocks": assign_blocks,
         "state_diagram": state_diagram,
+        "signal_dependency_map": _build_signal_dependency_map(always_blocks, assign_blocks),
         "summary": _summarize_flowchart(always_blocks, assign_blocks),
-        "confidence": "Summarized" if ctx["truncated"] else "Complete",
+        "detail_level": "summarized" if ctx["truncated"] else "complete",
         "truncated": ctx["truncated"],
         "truncation_reasons": sorted(ctx["truncation_reasons"]),
         "hidden_count": ctx["hidden_count"],
@@ -46,6 +56,7 @@ def _mark_truncated(ctx: dict, reason: str, hidden_count: int = 0) -> None:
 # ─── 前置處理 ─────────────────────────────────────────────────────────────────
 
 def _strip_comments(code: str) -> str:
+    """移除 /* ... */ 與 // 註解。"""
     code = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group().count('\n'), code, flags=re.DOTALL)
     code = re.sub(r'//[^\n]*', '', code)
     return code
@@ -57,7 +68,12 @@ def _scan_begin_end(s: str) -> tuple[str, str]:
     """
     從字串開頭掃描一個平衡 begin...end block。
     回傳 (完整 block 含 begin/end, 剩餘字串)。
-    假設 s 以 'begin' 開頭。Fast path: 只在 b/B/e/E 字元才呼叫 regex。
+    假設 s 以 'begin' 開頭。
+
+    Fast path 說明：
+    - 僅在 b/B/e/E 字元位置嘗試 regex，以減少不必要的匹配開銷
+    - \\b boundary 過濾掉 enable、byte 等非關鍵字識別字
+    - 若遇到非標準巢狀結構解析異常，可改成更保守的逐字元掃描
     """
     depth = 0
     i = 0
@@ -171,6 +187,7 @@ def _find_always_blocks(code: str, ctx: dict) -> list[dict]:
 
 
 def _parse_trigger(trigger_raw: str, always_kind: str = "") -> tuple[str, str]:
+    """將 always 的觸發條件標準化，並回傳 (trigger, trigger_type)。"""
     if always_kind == "comb":
         return "always_comb", "combinational"
     if always_kind == "latch":
@@ -432,6 +449,7 @@ def _try_parse_if(body: str, block_idx: int, counter: list, depth: int, ctx: dic
         edges.append({"id": f"e_{cond_id}_yes", "source": cond_id, "target": yes_entry, "label": "YES", "kind": "branch"})
 
     if else_body:
+        # else if 會透過遞迴再次進入 _try_parse_if()，形成巢狀 decision 結構
         no_nodes, no_edges, no_entry = _parse_body(else_body, block_idx, counter, depth + 1, ctx)
         nodes += no_nodes
         edges += no_edges
@@ -588,10 +606,12 @@ def _find_assign_stmts(code: str) -> list[dict]:
     results = []
     pattern = re.compile(r'\bassign\s+((?:\{[^}]+\}|\w+)(?:\s*\[[^\]]+\])?)\s*=\s*(.+?);', re.DOTALL)
     for idx, m in enumerate(pattern.finditer(code)):
+        expression = m.group(2).strip()
         results.append({
             "id": f"as_{idx}",
             "output": m.group(1).strip(),
-            "expression": _truncate(m.group(2).strip(), 48),
+            "expression": _truncate(expression, 48),
+            "input_signals": _signals_from_expr(expression),
         })
     return results
 
@@ -673,9 +693,16 @@ def _friendly_process(label: str) -> str:
     return label
 
 
+_FSM_STATE_NAMES = {"state", "cur_state", "current_state", "next_state", "ns", "ps", "fsm_state", "state_reg"}
+_FSM_CASE_PREFIXES = tuple(f"case({s}" for s in _FSM_STATE_NAMES)
+
+
 def _infer_block_role(nodes: list[dict], assigned_signals: list[str], trigger_type: str) -> str:
     decision_labels = [node.get("label", "") for node in nodes if node.get("type") == "decision"]
-    if "state" in assigned_signals or any(label.startswith("case(state") for label in decision_labels):
+    assigned_set = set(assigned_signals)
+    if (assigned_set & _FSM_STATE_NAMES) or any(
+        label.startswith(_FSM_CASE_PREFIXES) for label in decision_labels
+    ):
         return "fsm"
     if trigger_type == "combinational" and assigned_signals:
         return "output_decode"
@@ -741,6 +768,15 @@ def _state_labels(nodes: list[dict]) -> list[str]:
 
 
 def _build_state_diagram(always_blocks: list[dict]) -> dict | None:
+    """
+    從 FSM block 中建立近似的 state transition diagram。
+
+    注意：
+    - 這是 heuristic-derived 的結果，不是嚴格的 FSM 語意還原
+    - 依賴 case arm label 與 state 訊號命名來推斷 state 名稱
+    - 若 Verilog 使用非標準命名或參數化 state，可能無法正確識別
+    - 回傳 None 表示無法偵測到 FSM 結構
+    """
     states = set()
     transitions = []
     for block in always_blocks:
@@ -793,6 +829,52 @@ def _reachable_state_update_nodes(start_id: str, node_by_id: dict, adjacency: di
             continue
         stack.extend(adjacency.get(node_id, []))
     return found
+
+
+# ─── 訊號依賴對照表 ───────────────────────────────────────────────────────────
+
+def _build_signal_dependency_map(always_blocks: list[dict], assign_blocks: list[dict]) -> dict:
+    """
+    建立跨 block 的訊號讀寫對照表。
+
+    回傳格式：
+    {
+        "state": {"written_by": ["ab_0"], "read_by": ["ab_0", "ab_1"]},
+        "clk":   {"written_by": [],       "read_by": ["ab_0"]},
+    }
+
+    注意：這是依靜態解析結果建立的近似對照表，不保證涵蓋所有隱含依賴。
+    """
+    dep_map: dict[str, dict] = {}
+
+    def _ensure(sig: str) -> None:
+        if sig not in dep_map:
+            dep_map[sig] = {"written_by": [], "read_by": []}
+
+    for block in always_blocks:
+        block_id = block["id"]
+        for sig in block.get("assigned_signals", []):
+            _ensure(sig)
+            if block_id not in dep_map[sig]["written_by"]:
+                dep_map[sig]["written_by"].append(block_id)
+        for sig in block.get("condition_signals", []):
+            _ensure(sig)
+            if block_id not in dep_map[sig]["read_by"]:
+                dep_map[sig]["read_by"].append(block_id)
+
+    for assign in assign_blocks:
+        assign_id = assign["id"]
+        output = _base_signal(assign.get("output", ""))
+        if output:
+            _ensure(output)
+            if assign_id not in dep_map[output]["written_by"]:
+                dep_map[output]["written_by"].append(assign_id)
+        for sig in assign.get("input_signals", []):
+            _ensure(sig)
+            if assign_id not in dep_map[sig]["read_by"]:
+                dep_map[sig]["read_by"].append(assign_id)
+
+    return dep_map
 
 
 # ─── 測試入口 ─────────────────────────────────────────────────────────────────

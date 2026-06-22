@@ -431,6 +431,16 @@ export default function LogicFlowchart({ data }: LogicFlowchartProps) {
           {data.truncated && (
             <p className="mt-1 text-xs text-black/40">
               Summary view{data.hidden_count ? `, ${data.hidden_count} branch${data.hidden_count === 1 ? '' : 'es'} hidden` : ''}.
+              {data.truncation_reasons && data.truncation_reasons.length > 0 && (
+                <span className="ml-1">
+                  ({data.truncation_reasons.map(r => ({
+                    always_block_limit: 'too many always blocks',
+                    case_arm_limit: 'too many case arms',
+                    nesting_depth_limit: 'nesting too deep',
+                    loop_summary: 'loop summarized',
+                  }[r] ?? r)).join(', ')})
+                </span>
+              )}
             </p>
           )}
         </div>

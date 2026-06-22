@@ -1,12 +1,3 @@
-"""
-eda_tools/yosys_runner.py — Yosys 合成工具呼叫封裝與 PPA 報告解析
-
-包含：
-- Yosys subprocess 呼叫
-- synth.json / stat 文字輸出解析（PPA 指標萃取）
-- Top module 自動選擇
-"""
-
 import os
 import re
 import json
@@ -22,6 +13,7 @@ def run_synthesis(
     verilog_path: str,
     top_module: str | None,
     output_json: str = "synth.json",
+    design_files: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     """
     執行 Yosys 合成，輸出 synth.json 與 stat 資訊。
@@ -31,20 +23,23 @@ def run_synthesis(
         verilog_path: 主 .v 檔案路徑（用於 fallback 檔名）
         top_module: Yosys synth 指定的頂層 module 名稱（可 None）
         output_json: Yosys write_json 的輸出檔名（相對 run_dir）
+        design_files: 要納入 synthesis 的 design 檔名清單（相對 run_dir）
 
     Returns:
         subprocess.CompletedProcess
     """
-    design_files = sorted(
-        f for f in os.listdir(run_dir)
-        if f.endswith(".v") and not is_testbench_filename(f)
-    )
+    if design_files is None:
+        design_files = sorted(
+            f for f in os.listdir(run_dir)
+            if f.endswith(".v") and not is_testbench_filename(f)
+        )
+
     if not design_files:
         design_files = [os.path.basename(verilog_path)]
 
-    read_cmds = "; ".join(f"read_verilog {f}" for f in design_files)
+    read_cmds = "; ".join(f"read_verilog {_yosys_quote(f)}" for f in design_files)
     synth_cmd = f"synth -top {top_module}" if top_module else "synth"
-    yosys_script = f"{read_cmds}; {synth_cmd}; write_json {output_json}; stat"
+    yosys_script = f"{read_cmds}; {synth_cmd}; write_json {_yosys_quote(output_json)}; stat"
 
     yosys_cmd = resolve_tool("yosys")
     return subprocess.run(
@@ -57,13 +52,25 @@ def run_synthesis(
     )
 
 
+def _yosys_quote(value: str) -> str:
+    return json.dumps(value)
+
+
 def select_synthesis_top(
     parser_result: dict | None,
     design_files: list[str],
 ) -> str | None:
     """
     依模組依賴關係選出合適的頂層 module 供 Yosys synth -top 使用。
-    採用「沒有被任何其他 module 例化」的模組作為根節點。
+
+    採用策略：
+    - 找出沒有被任何其他 module 例化的模組作為候選 root
+    - 若有多個候選，優先選擇與 design_files stem 對得上的模組
+    - 若仍無法明確判定，回傳 parser_result 中的第一個 module
+
+    注意：
+    - 這是依靜態解析結果做的近似推斷
+    - 若 parser_result 不完整，結果可能不準
     """
     if not parser_result:
         return None
@@ -104,7 +111,11 @@ def select_synthesis_top(
 def parse_synthesis_json(json_path: str) -> dict:
     """
     從 Yosys write_json 產生的 JSON 檔直接解析 PPA 指標。
-    比解析文字輸出更可靠，不受 stdout/stderr 分流影響。
+
+    說明：
+    - cell_count / wire_count / flip_flop_count 為近似統計
+    - wire_count 以 netnames 數量估算，不一定等於實際 wire 實例數
+    - area_estimate 為 heuristic 分類，不是實測面積
     """
     try:
         with open(json_path, "r", encoding="utf-8", errors="replace") as f:
@@ -187,6 +198,13 @@ def _parse_wire_count(output: str) -> int:
 
 
 def _parse_flip_flop_count(output: str) -> int:
+    """
+    從文字輸出粗略估計 flip-flop 數量。
+
+    注意：
+    - 這是 fallback heuristic，精準度不如 JSON 解析
+    - 若輸出格式改變，可能需要同步調整 regex
+    """
     total = 0
     for m in re.finditer(r'\$_DFF_\w+_\s+(\d+)', output):
         total += int(m.group(1))

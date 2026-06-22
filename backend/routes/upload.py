@@ -1,19 +1,10 @@
-"""
-routes/upload.py — 上傳、執行、狀態查詢相關路由
-
-Blueprint: upload
-  POST   /api/upload              上傳 .v 檔案並執行靜態解析
-  POST   /api/run                 觸發 EDA pipeline（背景 Thread）
-  DELETE /api/run/<run_id>        刪除 pending 狀態的 run
-  GET    /api/status/<run_id>     查詢各 stage 即時狀態
-"""
-
 import os
 import uuid
 import shutil
 import threading
 
 from flask import Blueprint, request, jsonify
+from werkzeug.utils import secure_filename
 
 import db_manager
 import config
@@ -34,9 +25,15 @@ def upload():
     if not files:
         return jsonify({"error": "未找到上傳檔案", "code": "NO_FILE"}), 400
 
+    seen_filenames = set()
     for f in files:
-        if not f.filename.endswith(".v"):
-            return jsonify({"error": f"只接受 .v 檔案，收到：{f.filename}", "code": "INVALID_EXT"}), 400
+        safe_name, error = _safe_upload_filename(f.filename)
+        if error:
+            return jsonify({"error": error, "code": "INVALID_FILENAME"}), 400
+        if safe_name in seen_filenames:
+            return jsonify({"error": f"duplicate filename: {safe_name}", "code": "DUPLICATE_FILENAME"}), 400
+        seen_filenames.add(safe_name)
+        f.filename = safe_name
 
     run_id = str(uuid.uuid4())
     run_dir = os.path.join(config.UPLOAD_DIR, run_id)
@@ -75,6 +72,25 @@ def upload():
         "parser_result": parser_result,
         "preview": main_content[:300],
     })
+
+
+def _safe_upload_filename(filename: str | None) -> tuple[str | None, str | None]:
+    raw = (filename or "").strip()
+    if not raw:
+        return None, "missing filename"
+
+    if raw != os.path.basename(raw):
+        return None, f"invalid filename path: {raw}"
+
+    safe_name = secure_filename(raw)
+    if not safe_name:
+        return None, "invalid filename"
+    if safe_name != raw:
+        return None, f"unsupported filename characters: {raw}"
+    if not safe_name.lower().endswith(".v"):
+        return None, f"only .v files are supported: {raw}"
+
+    return safe_name, None
 
 
 @bp.route("/api/run", methods=["POST"])

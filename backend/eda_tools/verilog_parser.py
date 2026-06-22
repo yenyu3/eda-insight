@@ -1,11 +1,3 @@
-"""
-verilog_parser.py — Verilog 靜態分析器
-
-使用 Python re 模組解析 Verilog 原始碼，不呼叫任何外部工具。
-萃取 module 結構、port 清單、訊號宣告、邏輯區塊、子模組例化，
-以及基本 Lint 問題（如未使用訊號）。
-"""
-
 import re
 import json
 
@@ -102,10 +94,17 @@ def _extract_signals(port_list_raw: str, body: str) -> list[str]:
 
 
 def _detect_logic_type(body: str) -> str:
-    """根據 always/assign 區塊判斷邏輯類型。"""
-    has_sequential = bool(re.search(r'\balways\s*@\s*\(\s*(?:posedge|negedge)', body, re.IGNORECASE))
-    has_combinational = bool(re.search(r'\balways\s*@\s*\(\s*\*', body, re.IGNORECASE)) or \
-                        bool(re.search(r'\bassign\b', body, re.IGNORECASE))
+    """根據 always/assign 區塊判斷邏輯類型，支援 Verilog 與 SystemVerilog 語法。"""
+    has_sequential = (
+        bool(re.search(r'\balways_ff\b', body, re.IGNORECASE))
+        or bool(re.search(r'\balways_latch\b', body, re.IGNORECASE))
+        or bool(re.search(r'\balways\s*@\s*\(\s*(?:posedge|negedge)', body, re.IGNORECASE))
+    )
+    has_combinational = (
+        bool(re.search(r'\balways_comb\b', body, re.IGNORECASE))
+        or bool(re.search(r'\balways\s*@\s*\(\s*\*', body, re.IGNORECASE))
+        or bool(re.search(r'\bassign\b', body, re.IGNORECASE))
+    )
     if has_sequential and has_combinational:
         return "mixed"
     if has_sequential:
@@ -215,7 +214,8 @@ def _extract_decl_names(raw: str) -> list[str]:
 def _extract_instantiations(body: str, current_module: str) -> list[str]:
     keywords = {
         "module", "endmodule", "input", "output", "inout", "wire", "reg",
-        "always", "assign", "initial", "begin", "end", "if", "else", "case",
+        "logic", "always", "always_ff", "always_comb", "always_latch",
+        "assign", "initial", "begin", "end", "if", "else", "case",
         "endcase", "casez", "casex", "for", "while", "parameter", "localparam",
         "posedge", "negedge", "integer", "generate", "endgenerate",
         "task", "endtask", "function", "endfunction", "automatic",
@@ -238,7 +238,7 @@ def _extract_instantiations(body: str, current_module: str) -> list[str]:
 
 def _check_lint(code: str, modules: list[dict]) -> list[dict]:
     """
-    執行基本 Lint 檢查，目前包含：
+    執行基本 Lint 檢查（heuristic，非嚴格分析，可能有誤報）。
     - unused_wire：宣告但只出現一次（僅宣告，未在其他地方使用）的 wire/reg 訊號
     """
     issues = []

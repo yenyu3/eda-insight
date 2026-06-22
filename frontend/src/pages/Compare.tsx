@@ -158,12 +158,23 @@ function RadarChart({ cmp }: { cmp: CompareResult }) {
 
 function CorrectnessCard({ label, passed }: { label: string; passed: boolean | null | undefined }) {
   const isFailed = passed === false
+  const isUnknown = passed == null
+  const cardClass = isUnknown
+    ? 'border-black/15 bg-black/[0.025]'
+    : isFailed
+      ? 'border-red-200 bg-red-50'
+      : 'border-emerald-200 bg-emerald-50'
+  const textClass = isUnknown
+    ? 'text-black/55'
+    : isFailed
+      ? 'text-red-700'
+      : 'text-emerald-700'
   return (
-    <div className={`rounded-xl border p-5 text-center ${isFailed ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
-      <p className={`text-xs font-semibold uppercase tracking-[0.12em] ${isFailed ? 'text-red-700' : 'text-emerald-700'}`}>
+    <div className={`rounded-xl border p-5 text-center ${cardClass}`}>
+      <p className={`text-xs font-semibold uppercase tracking-[0.12em] ${textClass}`}>
         {label}
       </p>
-      <p className={`mt-2 text-lg font-semibold ${isFailed ? 'text-red-700' : 'text-emerald-700'}`}>
+      <p className={`mt-2 text-lg font-semibold ${textClass}`}>
         {passed == null ? 'Unknown' : passed ? 'Sim passed' : 'Sim failed'}
       </p>
     </div>
@@ -398,7 +409,7 @@ export default function Compare() {
     enabled: !!submitted && !!runIdA && !!runIdB,
   })
 
-  const runs = history?.runs?.filter((r) => r.status !== 'pending') ?? []
+  const runs = history?.runs?.filter((r) => r.status === 'done') ?? []
   const recommended = cmp?.recommended === 'a' ? cmp.version_a : cmp?.recommended === 'b' ? cmp.version_b : null
   const verdictCards = cmp ? buildVerdictCards(cmp) : []
 

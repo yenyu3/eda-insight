@@ -1,13 +1,8 @@
-"""
-eda_tools/iverilog_runner.py — Icarus Verilog 工具呼叫封裝
-
-負責 iverilog 編譯與 vvp 模擬的 subprocess 呼叫，
-以及 EDA 工具路徑解析（支援 Windows oss-cad-suite）。
-"""
-
 import os
 import shutil
 import subprocess
+
+DEFAULT_TIMEOUT_SEC = 60
 
 
 def compile_verilog(
@@ -16,6 +11,10 @@ def compile_verilog(
 ) -> subprocess.CompletedProcess:
     """
     使用 iverilog 編譯 run_dir 下所有 .v 檔案。
+
+    注意：
+    - 目前會編譯目錄內所有 .v 檔案，包含 testbench
+    - 若未來要區分 design / testbench，可在呼叫端先過濾檔案
 
     Args:
         run_dir: 包含 .v 檔案的目錄路徑
@@ -26,11 +25,12 @@ def compile_verilog(
     """
     verilog_filenames = sorted(f for f in os.listdir(run_dir) if f.endswith(".v"))
     iverilog_cmd = resolve_tool("iverilog")
+
     return subprocess.run(
         [iverilog_cmd, "-o", output_file, "-g2012"] + verilog_filenames,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=DEFAULT_TIMEOUT_SEC,
         cwd=run_dir,
         env=tool_env(iverilog_cmd),
     )
@@ -51,11 +51,12 @@ def run_simulation(
         subprocess.CompletedProcess
     """
     vvp_cmd = resolve_tool("vvp")
+
     return subprocess.run(
         [vvp_cmd, sim_file],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=DEFAULT_TIMEOUT_SEC,
         cwd=run_dir,
         env=tool_env(vvp_cmd),
     )
@@ -64,7 +65,19 @@ def run_simulation(
 def resolve_tool(tool_name: str) -> str:
     """
     解析 EDA 工具的可執行檔路徑。
-    優先使用 PATH，其次嘗試 Windows 常見安裝路徑（oss-cad-suite）。
+
+    搜尋順序：
+    1. PATH
+    2. Windows 常見安裝路徑（oss-cad-suite / chocolatey）
+
+    Args:
+        tool_name: 工具名稱，例如 iverilog、vvp
+
+    Returns:
+        工具可執行檔的完整路徑
+
+    Raises:
+        FileNotFoundError: 找不到工具時拋出
     """
     found = shutil.which(tool_name)
     if found:
@@ -72,7 +85,9 @@ def resolve_tool(tool_name: str) -> str:
 
     exe_name = f"{tool_name}.exe" if os.name == "nt" else tool_name
     candidates = []
+
     if os.name == "nt":
+        # 常見 Windows 安裝位置：oss-cad-suite、Chocolatey
         candidates.extend([
             os.path.join("C:\\", "oss-cad-suite", "bin", exe_name),
             os.path.join("C:\\", "ProgramData", "chocolatey", "bin", exe_name),
@@ -83,25 +98,38 @@ def resolve_tool(tool_name: str) -> str:
             return path
 
     raise FileNotFoundError(
-        f"{tool_name} not found. Install it or add its bin directory to PATH."
+        f"Cannot find '{tool_name}'. Please install it and ensure its bin directory is in PATH."
     )
 
 
 def tool_env(tool_path: str) -> dict[str, str]:
     """
-    建立帶有工具 lib 目錄前置的環境變數 dict，
-    確保動態連結函式庫能被正確找到（Windows 特別需要）。
+    建立工具執行所需的環境變數。
+
+    目的：
+    - 確保工具本體與其相依的動態函式庫能被找到
+    - Windows 上對 oss-cad-suite 類安裝特別重要
+
+    Args:
+        tool_path: 工具可執行檔的完整路徑
+
+    Returns:
+        已補充 PATH 的環境變數 dict
     """
     env = os.environ.copy()
     tool_dir = os.path.dirname(tool_path)
     suite_root = os.path.dirname(tool_dir)
     suite_lib = os.path.join(suite_root, "lib")
+
     current_path = env.get("PATH", "")
     path_parts = [p for p in current_path.split(os.pathsep) if p]
+
     prepend = [
         p for p in (tool_dir, suite_lib)
         if p and os.path.exists(p) and p not in path_parts
     ]
+
     if prepend:
         env["PATH"] = os.pathsep.join(prepend + ([current_path] if current_path else []))
+
     return env

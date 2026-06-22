@@ -163,6 +163,8 @@ function getStageNarrative(stage: Stage, result: AnalysisResult | undefined): st
       return issues === 0 ? 'No lint issues found.' : `Found ${issues} lint issue${issues !== 1 ? 's' : ''} — review recommended.`
     }
     case 'simulation': {
+      if (result?.sim_status?.error) return result.sim_status.error
+      if (result?.sim_status?.warning) return result.sim_status.warning
       if (stage.status === 'error') return 'Simulation failed — check testbench and Verilog syntax.'
       const hasWaveform = (result?.waveform?.signals?.length ?? 0) > 0
       return hasWaveform
@@ -327,6 +329,19 @@ export default function Analysis() {
   const overallStatus = status?.overall as StageStatus | undefined
   const warnings = result?.lint_issues?.length ?? 0
   const hasError = status?.overall === 'error'
+  const simulationStatus = !isDone
+    ? 'Running'
+    : hasError
+      ? 'Check logs'
+      : resultLoading
+        ? 'Loading'
+        : result?.sim_status == null
+          ? 'N/A'
+          : result.sim_status.passed === true
+            ? 'Passed'
+            : result.sim_status.passed === false
+              ? 'Review'
+              : 'Unknown'
   const doneStages = stages.filter((s) => s.status === 'done').length
   const progressPct = stages.length ? Math.round((doneStages / stages.length) * 100) : 0
 
@@ -440,7 +455,7 @@ export default function Analysis() {
                 <div className="grid-metrics">
                   <MetricCard
                     label="Simulation"
-                    value={hasError ? 'Check logs' : isDone ? 'Passed' : 'Running'}
+                    value={simulationStatus}
                   />
                   <MetricCard label="Warnings" value={warnings} />
                   <MetricCard label="Errors" value={hasError ? 1 : 0} />
@@ -505,7 +520,11 @@ export default function Analysis() {
               ) : isDone ? (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Waveform</h2>
-                  <p className="text-sm text-black/45">No waveform data was produced for this run.</p>
+                  <p className="text-sm text-black/45">
+                    {result?.sim_status?.error ||
+                      result?.sim_status?.warning ||
+                      'No waveform data was produced for this run.'}
+                  </p>
                 </section>
               ) : null}
 

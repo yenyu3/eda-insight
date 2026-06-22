@@ -59,6 +59,13 @@ export interface WaveformData {
   warning?: string
 }
 
+export interface SimulationStatus {
+  status?: 'running' | 'ok' | 'warning' | 'error' | string | null
+  passed?: boolean | null
+  warning?: string | null
+  error?: string | null
+}
+
 export interface SynthesisResult {
   cell_count: number | null
   wire_count: number | null
@@ -144,6 +151,7 @@ export interface AssignBlock {
   id: string
   output: string
   expression: string
+  input_signals?: string[]
 }
 
 export interface FlowchartData {
@@ -155,7 +163,7 @@ export interface FlowchartData {
     summary?: string
   } | null
   summary?: string
-  confidence?: 'Complete' | 'Summarized' | 'Partial parse' | string
+  detail_level?: 'complete' | 'summarized' | string
   truncated?: boolean
   truncation_reasons?: string[]
   hidden_count?: number
@@ -169,6 +177,7 @@ export interface AnalysisResult {
   parser_result: ParserResult
   workflow_plan: WorkflowPlan | null
   waveform: WaveformData | null
+  sim_status?: SimulationStatus | null
   synthesis: SynthesisResult | null
   dependency_graph: DependencyGraphData | null
   ai_summary: string | null

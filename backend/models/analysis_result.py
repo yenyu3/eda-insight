@@ -1,16 +1,16 @@
-"""
-models/analysis_result.py — EDA 分析結果資料模型
-
-整合 parser / lint / simulation / synthesis / AI 各階段的輸出，
-提供統一格式供 API routes 組裝回應。
-"""
-
 from __future__ import annotations
-from typing import Optional
+
+from typing import Optional, Any
 
 
 class AnalysisResult:
-    """一次 run 的完整分析結果，對應 GET /api/result/<run_id> 的回應格式。"""
+    """
+    一次 run 的完整分析結果，對應 GET /api/result/<run_id> 的回應格式。
+
+    這個類別主要作為：
+    - DB 資料與 API response 的中介層
+    - 前後端共享 schema 的單一來源
+    """
 
     def __init__(
         self,
@@ -39,16 +39,16 @@ class AnalysisResult:
         self.flowchart = flowchart
 
     @property
-    def lint_issues(self) -> list:
+    def lint_issues(self) -> list[dict]:
         """從 parser_result 直接取出 lint_issues 列表。"""
         return (self.parser_result or {}).get("lint_issues", [])
 
     @property
-    def modules(self) -> list:
+    def modules(self) -> list[dict]:
         """從 parser_result 直接取出 modules 列表。"""
         return (self.parser_result or {}).get("modules", [])
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """序列化為 API /api/result 回應格式。"""
         return {
             "run_id": self.run_id,
@@ -65,12 +65,49 @@ class AnalysisResult:
             "flowchart": self.flowchart,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "AnalysisResult":
+        """
+        從 dict 反序列化成 AnalysisResult。
+
+        支援資料來源：
+        - DB 讀出的 dict
+        - API response dict
+        - 測試資料 dict
+        """
+        return cls(
+            run_id=data.get("run_id", ""),
+            filename=data.get("filename", ""),
+            parser_result=data.get("parser_result"),
+            workflow_plan=data.get("workflow_plan"),
+            waveform=data.get("waveform"),
+            synthesis=data.get("synthesis"),
+            dependency_graph=data.get("dependency_graph"),
+            ai_summary=data.get("ai_summary"),
+            risk_scores=data.get("risk_scores"),
+            bottleneck_analysis=data.get("bottleneck_analysis"),
+            flowchart=data.get("flowchart"),
+        )
+
     def __repr__(self) -> str:
-        return f"<AnalysisResult run={self.run_id[:8]} modules={len(self.modules)} lint={len(self.lint_issues)}>"
+        return (
+            f"<AnalysisResult run={self.run_id[:8]} "
+            f"modules={len(self.modules)} lint={len(self.lint_issues)}>"
+        )
 
 
 class SynthesisMetrics:
-    """合成階段的 PPA 指標，對應 Yosys 輸出。"""
+    """
+    合成階段的 PPA 指標，對應 Yosys 輸出。
+
+    欄位語意：
+    - cell_count: cell 數量
+    - wire_count: wire / net 數量（heuristic）
+    - flip_flop_count: flip-flop 數量
+    - critical_path_ns: 臨界路徑時間（ns）
+    - slack_ns: slack（ns）
+    - area_estimate: 粗略面積估計分類
+    """
 
     def __init__(
         self,
@@ -89,7 +126,10 @@ class SynthesisMetrics:
         self.area_estimate = area_estimate
 
     @classmethod
-    def from_dict(cls, data: dict) -> "SynthesisMetrics":
+    def from_dict(cls, data: Optional[dict]) -> "SynthesisMetrics":
+        if not data:
+            return cls()
+
         return cls(
             cell_count=data.get("cell_count", 0),
             wire_count=data.get("wire_count", 0),
@@ -99,7 +139,7 @@ class SynthesisMetrics:
             area_estimate=data.get("area_estimate", "unknown"),
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "cell_count": self.cell_count,
             "wire_count": self.wire_count,
@@ -110,4 +150,7 @@ class SynthesisMetrics:
         }
 
     def __repr__(self) -> str:
-        return f"<SynthesisMetrics cells={self.cell_count} wires={self.wire_count} ff={self.flip_flop_count}>"
+        return (
+            f"<SynthesisMetrics cells={self.cell_count} "
+            f"wires={self.wire_count} ff={self.flip_flop_count}>"
+        )

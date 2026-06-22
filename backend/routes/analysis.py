@@ -1,11 +1,3 @@
-"""
-routes/analysis.py — 分析結果查詢路由
-
-Blueprint: analysis
-  GET /api/result/<run_id>   取得完整執行結果（波形、PPA、flowchart 等）
-  GET /api/logs/<run_id>     取得各 stage log
-"""
-
 from flask import Blueprint, jsonify
 
 import db_manager
@@ -29,12 +21,17 @@ def get_result(run_id: str):
         except Exception as e:
             flowchart = {"error": True, "message": str(e)}
 
+    sim_result = run.get("sim_result")
+    waveform = sim_result.get("stats") if isinstance(sim_result, dict) else sim_result
+    sim_status = _simulation_status(sim_result)
+
     return jsonify({
         "run_id": run_id,
-        "filename": run["filename"],
+        "filename": run.get("filename"),
         "parser_result": run.get("parser_result"),
         "workflow_plan": run.get("workflow_plan"),
-        "waveform": run.get("sim_result"),
+        "waveform": waveform,
+        "sim_status": sim_status,
         "synthesis": run.get("synthesis_result"),
         "dependency_graph": run.get("dependency_graph"),
         "ai_summary": run.get("ai_summary"),
@@ -43,6 +40,17 @@ def get_result(run_id: str):
         "lint_issues": (run.get("parser_result") or {}).get("lint_issues", []),
         "flowchart": flowchart,
     })
+
+
+def _simulation_status(sim_result) -> dict | None:
+    if not isinstance(sim_result, dict):
+        return None
+    return {
+        "status": sim_result.get("status"),
+        "passed": sim_result.get("passed"),
+        "warning": sim_result.get("warning"),
+        "error": sim_result.get("error"),
+    }
 
 
 @bp.route("/api/logs/<run_id>", methods=["GET"])
