@@ -1,18 +1,10 @@
 # VeriFlow Insight
 
-VeriFlow Insight 是一個以 Verilog 設計為核心的 EDA 工作流觀測與 AI 輔助分析平台。它將 Verilog 上傳、靜態解析、lint 檢查、Icarus Verilog simulation、Yosys synthesis、dependency graph、run history、版本比較與 AI 摘要整合成一個可視化系統，適合用來展示或驗證小型 RTL 設計的分析流程。
-
-## 專案概述
-
-### 專案名稱
-
-**VeriFlow Insight**
-
-名稱由 Verilog、workflow 與 insight 組成，對應本專案的三個重點：RTL 原始碼、EDA pipeline，以及可理解的分析結果。
+VeriFlow Insight 是一個面向 EDA 產業非開發者角色的 AI-first Workflow Observability Platform，主要服務 AE、SE、EDA PM 等需要理解設計流程與風險、但不一定直接撰寫工具腳本或閱讀大量 EDA log 的使用者。使用者只要上傳 Verilog 程式碼，系統就會自動執行完整 EDA pipeline，並透過 AI 分析結果與互動式視覺化儀表板呈現 workflow 狀態、設計風險與工程決策線索。
 
 ### 系統定位
 
-本系統定位為 **AI-assisted EDA Workflow Observability Platform**。它不是完整商用 EDA 工具，也不是單純的語法檢查器，而是一個把開源 EDA 工具與 Web UI 串起來的分析平台：
+本系統定位為 **AI-first Workflow Observability Platform for EDA**。不是完整商用 EDA 工具，也不是單純的語法檢查器，而是一個為 EDA 產業非開發者角色設計的工作流觀測平台：讓使用者不需要讀懂 EDA log 或工具指令，也能理解 workflow 狀態、掌握設計風險，並做出工程決策。
 
 - 對 Verilog 原始碼做 module、port、signal、logic type 與 instantiation 解析。
 - 透過 heuristic lint 找出部分可疑訊號或風格問題。
@@ -24,11 +16,11 @@ VeriFlow Insight 是一個以 Verilog 設計為核心的 EDA 工作流觀測與 
 
 ### 價值主張
 
-VeriFlow Insight 的價值在於把分散的 EDA 指令、log、波形與合成數據整理成一個連續的觀測流程。對學生、RTL 初學者或 demo 場景來說，它可以降低理解 EDA pipeline 的門檻；對已熟悉 EDA 的使用者來說，它提供一個輕量的 run-based dashboard，用來快速比較不同 Verilog 版本的結構、simulation 狀態與 synthesis 指標。
+VeriFlow Insight 的核心價值主張是解決現有 EDA 工具鏈的「黑盒問題」。把分散的 EDA 指令、log、波形與合成數據整理成一個連續的觀測流程：使用者上傳一段 Verilog 程式碼後，系統自動完成解析、lint、simulation、synthesis、dependency analysis 與 AI report，並以互動視覺化儀表板呈現結果。整個過程不要求使用者懂任何 EDA 工具指令，也能快速比較不同 Verilog 版本的結構、simulation 狀態、synthesis 指標與設計風險。
 
 ### Python 在本專案的角色
 
-Python 是本專案的後端核心，負責把 EDA 工具、資料儲存與 AI 分析串接在一起：
+Python 是整個系統的核心語言，負責 EDA 工具控制、資料解析、AI 分析引擎、全部業務邏輯與 API 服務：
 
 - 使用 Flask 提供 REST API 與 Server-Sent Events。
 - 管理上傳檔案、run 目錄、SQLite 資料庫與 stage logs。
@@ -201,8 +193,6 @@ GEMINI_MODEL=gemini-2.5-flash
 MAX_TOKENS=1024
 USE_FIXED_PIPELINE=true
 ```
-
-`USE_FIXED_PIPELINE=true` 會使用固定流程：`lint`、`simulate`、`synthesize`、`dependency`。若改成 `false`，後端會嘗試使用 AI planner 決定 pipeline steps，失敗時會 fallback 到固定流程。
 
 ## 前端設定與執行
 
