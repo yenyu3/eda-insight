@@ -13,6 +13,7 @@ dist/
 backend/uploads/
 *.vcd
 *.out
+*.log
 
 # OS
 .DS_Store
