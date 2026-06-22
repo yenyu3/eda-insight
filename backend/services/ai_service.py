@@ -1,16 +1,17 @@
 """
-ai_engine.py — AI 分析引擎
+services/ai_service.py — AI 分析引擎
 
 封裝 Anthropic Claude / Google Gemini API 的所有呼叫。
 可用 AI_PROVIDER=anthropic 或 AI_PROVIDER=gemini 切換。
-提供六個功能模組：verilog_insight、workflow_planner、log_insight、
-debug_advisor、risk_analyzer、bottleneck_detector。
+提供六個功能：verilog_insight、workflow_planner、log_insight、
+debug_advisor、risk_analyzer、bottleneck_detector、compare_tradeoff。
 """
 
 import os
 import json
-import re
 from typing import Generator
+
+from utils.json_utils import safe_parse_json, mock_stream
 
 try:
     import anthropic
@@ -22,14 +23,24 @@ try:
 except ImportError:
     genai = None
 
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
-GEMINI_MODEL = "gemini-2.5-flash"
-MAX_TOKENS = 1024
-VALID_STEPS = {"lint", "simulate", "synthesize", "dependency"}
+_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+_GEMINI_MODEL = "gemini-2.5-flash"
+_MAX_TOKENS = 1024
+_VALID_STEPS = {"lint", "simulate", "synthesize", "dependency"}
+
+# 模組層級單例（延遲初始化）
+_ai_engine: "AIEngine | None" = None
+
+
+def get_ai_engine() -> "AIEngine":
+    """回傳全域 AIEngine 單例（延遲初始化，避免啟動時 API key 缺失崩潰）。"""
+    global _ai_engine
+    if _ai_engine is None:
+        _ai_engine = AIEngine()
+    return _ai_engine
 
 
 def _use_mock() -> bool:
-    """每次呼叫時動態讀取，確保 dotenv 生效後的值能被正確取得。"""
     return os.environ.get("USE_MOCK_AI", "false").lower() == "true"
 
 
@@ -40,10 +51,10 @@ class AIEngine:
         self.client = None
         self.provider = os.environ.get("AI_PROVIDER", "anthropic").lower()
         self.model = ""
-        self._mock = True  # 預設 mock，成功建立 client 才設 False
+        self._mock = True
 
         if _use_mock():
-            return  # mock mode，直接結束
+            return
 
         if self.provider == "gemini":
             self._init_gemini()
@@ -53,53 +64,40 @@ class AIEngine:
 
     def _init_anthropic(self) -> None:
         if anthropic is None:
-            return  # 套件未安裝，fallback mock
-
+            return
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key or api_key in {"your-key-here", "your-anthropic-key-here"}:
-            return  # key 未設定，fallback mock
-
+            return
         try:
             self.client = anthropic.Anthropic(api_key=api_key)
-            self.model = os.environ.get("ANTHROPIC_MODEL", ANTHROPIC_MODEL)
+            self.model = os.environ.get("ANTHROPIC_MODEL", _ANTHROPIC_MODEL)
             self._mock = False
         except Exception:
-            # 任何初始化錯誤（如 proxies 相容性問題）都 fallback mock
             self.client = None
             self._mock = True
 
     def _init_gemini(self) -> None:
         if genai is None:
-            return  # 套件未安裝，fallback mock
-
+            return
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key or api_key == "your-gemini-key-here":
-            return  # key 未設定，fallback mock
-
+            return
         try:
             self.client = genai.Client(api_key=api_key)
-            self.model = os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
+            self.model = os.environ.get("GEMINI_MODEL", _GEMINI_MODEL)
             self._mock = False
         except Exception:
             self.client = None
             self._mock = True
 
     # ------------------------------------------------------------------
-    # 1. verilog_insight — 電路功能說明（streaming，MVP 必做）
+    # 1. verilog_insight — 電路功能說明（streaming）
     # ------------------------------------------------------------------
 
     def verilog_insight(self, parser_result: dict) -> Generator[str, None, None]:
-        """
-        根據 verilog_parser 輸出生成電路功能說明（串流版本）。
-
-        Args:
-            parser_result: verilog_parser.parse_verilog() 的輸出 dict
-
-        Yields:
-            AI 回傳的文字片段（供 SSE 串流使用）
-        """
+        """根據 verilog_parser 輸出生成電路功能說明（串流版本）。"""
         if self._mock:
-            yield from _mock_stream("這是一個 4 位元計數器電路，具有同步重置與使能控制。電路複雜度低，結構清晰。")
+            yield from mock_stream("這是一個 4 位元計數器電路，具有同步重置與使能控制。電路複雜度低，結構清晰。")
             return
 
         prompt = f"""你是 EDA 領域的技術顧問。根據以下 Verilog 解析結果，用繁體中文說明：
@@ -109,25 +107,14 @@ class AIEngine:
 請用清楚易懂的語言，讓非電路工程師也能理解。
 
 Verilog 解析結果：{json.dumps(parser_result, ensure_ascii=False)[:2000]}"""
-
         yield from self._stream(prompt)
 
     # ------------------------------------------------------------------
-    # 2. workflow_planner — 動態 pipeline 規劃（進階功能，MVP 完成後實作）
+    # 2. workflow_planner — 動態 pipeline 規劃
     # ------------------------------------------------------------------
 
     def workflow_planner(self, verilog_insight: str, user_goals: str) -> dict:
-        """
-        根據電路資訊與使用者目標，決定本次 pipeline 要執行哪些步驟。
-        回傳包含 steps 清單的 dict；若 AI 回傳格式有誤，自動 fallback 到預設流程。
-
-        Args:
-            verilog_insight: verilog_insight() 的輸出文字
-            user_goals: 使用者選擇的分析目標描述
-
-        Returns:
-            {"steps": ["simulate", "synthesize"], "reason": str}
-        """
+        """根據電路資訊與使用者目標，決定本次 pipeline 要執行哪些步驟。"""
         fallback = {"steps": ["lint", "simulate", "synthesize", "dependency"], "reason": "fallback: AI 回傳格式有誤"}
 
         if self._mock:
@@ -146,29 +133,20 @@ steps 只能從 ["lint", "simulate", "synthesize", "dependency"] 中選擇，可
 
         try:
             raw = self._complete(prompt, max_tokens=256)
-            data = _safe_parse_json(raw)
+            data = safe_parse_json(raw)
             steps = data.get("steps", [])
-            # 驗證：所有步驟必須在 VALID_STEPS 中
-            if not steps or not all(s in VALID_STEPS for s in steps):
+            if not steps or not all(s in _VALID_STEPS for s in steps):
                 return fallback
             return {"steps": steps, "reason": data.get("reason", "")}
         except Exception:
             return fallback
 
     # ------------------------------------------------------------------
-    # 3. log_insight — EDA log 分析（MVP 必做）
+    # 3. log_insight — EDA log 分析
     # ------------------------------------------------------------------
 
     def log_insight(self, log_text: str) -> dict:
-        """
-        分析 Icarus Verilog / Yosys 的 stdout log，回傳結構化摘要。
-
-        Args:
-            log_text: EDA 工具輸出的完整 log 文字
-
-        Returns:
-            {"events": [...], "warnings": [...], "summary": str}
-        """
+        """分析 Icarus Verilog / Yosys 的 stdout log，回傳結構化摘要。"""
         if self._mock:
             return {"events": [], "warnings": [], "summary": "Mock: log 分析完成，無重大問題。"}
 
@@ -184,27 +162,18 @@ Log 內容（最多 2000 字元）：
 {log_text[:2000]}"""
 
         try:
-            return _safe_parse_json(self._complete(prompt))
+            return safe_parse_json(self._complete(prompt))
         except Exception as e:
             return {"events": [], "warnings": [], "summary": f"分析失敗：{e}"}
 
     # ------------------------------------------------------------------
-    # 4. debug_advisor — 錯誤診斷（streaming，MVP 必做）
+    # 4. debug_advisor — 錯誤診斷（streaming）
     # ------------------------------------------------------------------
 
     def debug_advisor(self, stderr_text: str, verilog_content: str) -> Generator[str, None, None]:
-        """
-        分析 EDA 工具的 stderr 錯誤訊息，串流回傳修正建議。
-
-        Args:
-            stderr_text: 錯誤訊息（iverilog / yosys stderr）
-            verilog_content: 原始 Verilog 程式碼
-
-        Yields:
-            診斷文字片段
-        """
+        """分析 EDA 工具的 stderr 錯誤訊息，串流回傳修正建議。"""
         if self._mock:
-            yield from _mock_stream("偵測到語法錯誤：第 5 行缺少分號。建議在 `count <= count + 1` 後加上 `;`。")
+            yield from mock_stream("偵測到語法錯誤：第 5 行缺少分號。建議在 `count <= count + 1` 後加上 `;`。")
             return
 
         prompt = f"""你是 Verilog 除錯專家。根據以下錯誤訊息與程式碼，用繁體中文說明：
@@ -217,24 +186,14 @@ Log 內容（最多 2000 字元）：
 
 Verilog 程式碼：
 {verilog_content[:1500]}"""
-
         yield from self._stream(prompt)
 
     # ------------------------------------------------------------------
-    # 5. risk_analyzer — 設計風險評估（MVP 必做）
+    # 5. risk_analyzer — 設計風險評估
     # ------------------------------------------------------------------
 
     def risk_analyzer(self, synthesis_result: dict, waveform_stats: dict) -> dict:
-        """
-        根據合成指標與波形統計，回傳風險評分（0-10）。
-
-        Args:
-            synthesis_result: report_parser.parse_synthesis_report() 輸出
-            waveform_stats: vcd_parser 的 stats 欄位
-
-        Returns:
-            {"timing_risk": float, "area_risk": float, "function_risk": float, "summary": str}
-        """
+        """根據合成指標與波形統計，回傳風險評分（0-10）。"""
         if self._mock:
             return {"timing_risk": 2.5, "area_risk": 4.0, "function_risk": 1.0, "summary": "Mock: 電路整體風險偏低。"}
 
@@ -252,24 +211,16 @@ JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語
 波形統計：{json.dumps(waveform_stats, ensure_ascii=False)}"""
 
         try:
-            return _safe_parse_json(self._complete(prompt, max_tokens=512))
+            return safe_parse_json(self._complete(prompt, max_tokens=512))
         except Exception as e:
             return {"timing_risk": 0, "area_risk": 0, "function_risk": 0, "summary": f"分析失敗：{e}"}
 
     # ------------------------------------------------------------------
-    # 6. bottleneck_detector — 瓶頸節點識別（MVP 必做）
+    # 6. bottleneck_detector — 瓶頸節點識別
     # ------------------------------------------------------------------
 
     def bottleneck_detector(self, dag_result: dict) -> dict:
-        """
-        根據 dependency graph 識別瓶頸節點，提供優化建議。
-
-        Args:
-            dag_result: dependency_analyzer.build_dag() 輸出
-
-        Returns:
-            {"bottlenecks": [str], "impact": str, "suggestions": str}
-        """
+        """根據 dependency graph 識別瓶頸節點，提供優化建議。"""
         if self._mock:
             return {"bottlenecks": [], "impact": "Mock: 無明顯瓶頸。", "suggestions": "目前設計結構良好。"}
 
@@ -289,19 +240,22 @@ JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語
 DAG 資訊：{json.dumps(dag_result, ensure_ascii=False)[:1500]}"""
 
         try:
-            return _safe_parse_json(self._complete(prompt))
+            return safe_parse_json(self._complete(prompt))
         except Exception as e:
             return {"bottlenecks": [], "impact": f"分析失敗：{e}", "suggestions": ""}
 
     # ------------------------------------------------------------------
-    # 內部工具方法
+    # 7. compare_tradeoff — 兩版本 PPA 比較
     # ------------------------------------------------------------------
 
-    def compare_tradeoff(self, version_a: dict, version_b: dict, diff: dict, recommended: str | None) -> str:
-        """
-        Generate an AI-backed tradeoff analysis for two completed runs.
-        Falls back to a deterministic summary when mock mode is enabled or the provider fails.
-        """
+    def compare_tradeoff(
+        self,
+        version_a: dict,
+        version_b: dict,
+        diff: dict,
+        recommended: str | None,
+    ) -> str:
+        """生成兩個 run 的 tradeoff 分析文字。"""
         fallback = _fallback_compare_tradeoff(version_a, version_b, recommended)
         if self._mock:
             return fallback
@@ -331,29 +285,29 @@ Comparison JSON:
         except Exception:
             return fallback
 
+    # ------------------------------------------------------------------
+    # 內部工具方法
+    # ------------------------------------------------------------------
+
     def _stream(self, prompt: str) -> Generator[str, None, None]:
-        """執行 streaming 呼叫，yield 每個文字片段。"""
         if self.provider == "gemini":
             yield self._complete(prompt)
             return
-
         with self.client.messages.stream(
             model=self.model,
-            max_tokens=MAX_TOKENS,
+            max_tokens=_MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             for text in stream.text_stream:
                 yield text
 
-    def _complete(self, prompt: str, max_tokens: int = MAX_TOKENS) -> str:
-        """執行非串流模型呼叫，回傳純文字。"""
+    def _complete(self, prompt: str, max_tokens: int = _MAX_TOKENS) -> str:
         if self.provider == "gemini":
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=prompt,
             )
             return response.text or ""
-
         response = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -366,35 +320,11 @@ Comparison JSON:
 # 模組層級工具函式
 # ------------------------------------------------------------------
 
-def _safe_parse_json(text: str) -> dict:
-    """清除 AI 可能附加的 markdown fence 後解析 JSON；解析失敗回傳空 dict。"""
-    cleaned = text.strip()
-    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```$', '', cleaned)
-    try:
-        return json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
-def _mock_stream(text: str) -> Generator[str, None, None]:
-    """回傳假串流資料，每次 yield 一個詞（以空格分割）。"""
-    for word in text.split():
-        yield word + " "
-
-
-# ---------- Compare helpers ----------
-
 def _compact_compare_version(version: dict) -> dict:
     keys = (
-        "filename",
-        "sim_passed",
-        "warning_count",
-        "cell_count",
-        "wire_count",
-        "flip_flop_count",
-        "critical_path_ns",
-        "slack_ns",
+        "filename", "sim_passed", "warning_count",
+        "cell_count", "wire_count", "flip_flop_count",
+        "critical_path_ns", "slack_ns",
     )
     return {key: version.get(key) for key in keys}
 
@@ -410,17 +340,3 @@ def _fallback_compare_tradeoff(a: dict, b: dict, recommended: str | None) -> str
         reason_text = " and ".join(reasons) if reasons else "available comparison metrics"
         return f"{picked['filename']} is the recommended choice based on {reason_text}."
     return "The two runs are close on the available metrics. Review correctness, warnings, timing, slack, and waveform behavior before choosing one."
-
-
-# ---------- 測試入口 ----------
-
-if __name__ == "__main__":
-    engine = AIEngine()
-    mock_parser = {
-        "modules": [{"name": "counter_4bit", "ports": [], "signals": [], "logic_type": "sequential", "instantiations": []}],
-        "lint_issues": [],
-    }
-    print("=== verilog_insight (mock) ===")
-    for chunk in engine.verilog_insight(mock_parser):
-        print(chunk, end="", flush=True)
-    print()
