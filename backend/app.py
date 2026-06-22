@@ -1,4 +1,4 @@
-# load_dotenv 必須在所有自訂 module import 之前，確保 USE_MOCK_AI 等環境變數已就緒
+# load_dotenv 必須先於自訂 module import，確保環境變數已就緒
 from dotenv import load_dotenv
 load_dotenv(override=True)
 

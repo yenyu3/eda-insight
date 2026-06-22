@@ -25,7 +25,7 @@ def run_parse_stage(
 
     combined = verilog_content
 
-    # 若有 run_dir，則以目錄內所有 .v 檔合併內容進行解析
+    # 有 run_dir 時合併目錄內所有 .v 檔解析
     if run_dir and os.path.isdir(run_dir):
         parts = []
         for fname in sorted(os.listdir(run_dir)):

@@ -2,7 +2,7 @@ import re
 import json
 
 
-# ---------- 公開 API ----------
+# ─── 公開 API ───
 
 def parse_verilog(verilog_content: str) -> dict:
     """
@@ -28,7 +28,7 @@ def parse_verilog(verilog_content: str) -> dict:
     return {"modules": modules, "lint_issues": lint_issues}
 
 
-# ---------- 內部解析函式 ----------
+# ─── 內部解析函式 ───
 
 def _strip_comments(code: str) -> str:
     """移除單行（//）和多行（/* */）註解，保留行號對應。"""
@@ -40,7 +40,7 @@ def _strip_comments(code: str) -> str:
 def _extract_modules(code: str) -> list[dict]:
     """找出所有 module...endmodule 區塊並解析其內容。"""
     modules = []
-    # port list 是 optional：module foo; 和 module foo(...); 兩種都支援
+    # 支援 module foo; 和 module foo(...); 兩種宣告
     pattern = re.compile(
         r'\bmodule\s+(\w+)\s*(?:#\s*\(.*?\))?\s*(?:\((.*?)\))?\s*;(.*?)endmodule',
         re.DOTALL,
@@ -74,12 +74,12 @@ def _extract_signals(port_list_raw: str, body: str) -> list[str]:
     """
     signals = []
 
-    # Port list：每條 port 宣告只有一個名稱，用簡單 pattern
+    # Port list 每條宣告只有一個名稱
     port_pattern = re.compile(r'\b(?:wire|reg)\s+(?:\[[\d:]+\]\s*)?(\w+)', re.IGNORECASE)
     for m in port_pattern.finditer(port_list_raw):
         signals.append(m.group(1))
 
-    # Body：支援 `reg a, b, c;` 和 `wire [3:0] x;` 兩種格式
+    # Body 支援純名稱與含 bit range 的宣告
     body_pattern = re.compile(
         r'\b(?:wire|reg)\s+(?:\[[\d:]+\]\s*)?((?:\w+\s*,\s*)*\w+)\s*;',
         re.IGNORECASE,
@@ -90,7 +90,7 @@ def _extract_signals(port_list_raw: str, body: str) -> list[str]:
             if name:
                 signals.append(name)
 
-    return list(dict.fromkeys(signals))  # 去重並保持順序
+    return list(dict.fromkeys(signals))
 
 
 def _detect_logic_type(body: str) -> str:
@@ -260,7 +260,7 @@ def _find_signal_line(code: str, signal: str) -> int:
     return 0
 
 
-# ---------- 測試入口 ----------
+# ─── 測試入口 ───
 
 if __name__ == "__main__":
     import sys

@@ -38,7 +38,7 @@ def build_dag(parser_result: dict) -> dict:
 
         G.add_node(module_name)
 
-        # instantiations 內容為「被 instantiate 的 module 名稱」
+        # instantiations 內容為被 instantiate 的 module 名稱
         for inst in module.get("instantiations", []):
             if not inst:
                 continue

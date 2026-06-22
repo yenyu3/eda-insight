@@ -87,7 +87,7 @@ def resolve_tool(tool_name: str) -> str:
     candidates = []
 
     if os.name == "nt":
-        # 常見 Windows 安裝位置：oss-cad-suite、Chocolatey
+        # 常見 Windows 安裝位置
         candidates.extend([
             os.path.join("C:\\", "oss-cad-suite", "bin", exe_name),
             os.path.join("C:\\", "ProgramData", "chocolatey", "bin", exe_name),

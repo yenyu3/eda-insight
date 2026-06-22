@@ -8,7 +8,7 @@ import config
 DB_PATH = config.DB_PATH
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
-# 這些欄位在 DB 中以 JSON 字串儲存，取出時要還原
+# JSON 欄位取出時需還原成 Python 物件
 JSON_FIELDS = {
     "parser_result",
     "workflow_plan",
@@ -92,7 +92,7 @@ def init_db() -> None:
             );
         """)
 
-        # 舊資料庫向後相容：補齊可能缺少的欄位
+        # 舊資料庫向後相容，補齊可能缺少的欄位
         _ensure_column(conn, "runs", "risk_scores", "TEXT")
         _ensure_column(conn, "runs", "bottleneck_analysis", "TEXT")
         _ensure_column(conn, "runs", "design_content", "TEXT")

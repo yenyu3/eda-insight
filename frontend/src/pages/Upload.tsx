@@ -44,8 +44,7 @@ export default function Upload() {
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
-  // Track the latest pending runId and whether the pipeline was started,
-  // so we can clean up abandoned uploads on unmount or Re-select.
+  // Track pending uploads so abandoned runs can be cleaned up.
   const pendingRunIdRef = useRef<string | null>(null)
   const pipelineStartedRef = useRef(false)
 

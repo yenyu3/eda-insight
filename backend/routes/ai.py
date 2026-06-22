@@ -26,9 +26,9 @@ def stream(run_id: str):
 
     def generate():
         try:
-            # 第一段：等待既有 ai_summary 或 pipeline 結束
+            # 等待既有 ai_summary 或 pipeline 結束
             latest = None
-            for _ in range(120):  # 最多等 120 秒
+            for _ in range(120):
                 latest = db_manager.get_run(run_id)
                 if not latest:
                     yield _sse({"type": "error", "content": "run_id not found"})
@@ -54,7 +54,7 @@ def stream(run_id: str):
                 yield ": keep-alive\n\n"
                 time.sleep(1)
 
-            # 第二段：fallback，用 parser_result 即時生成摘要
+            # fallback 用 parser_result 即時生成摘要
             if not latest or latest.get("status") != "done":
                 yield _sse({"type": "error", "content": "pipeline timeout"})
                 return

@@ -1559,7 +1559,7 @@ select {
   font-weight: 700;
 }
 
-/* ── Verdict badge ── */
+/* ─── Verdict badge ─── */
 .verdict-badge {
   display: inline-flex;
   align-items: center;
@@ -1602,7 +1602,7 @@ select {
   color: rgba(0, 0, 0, 0.45);
 }
 
-/* ── Readiness Card ── */
+/* ─── Readiness Card ─── */
 .readiness-card {
   display: flex;
   align-items: flex-start;
@@ -1689,7 +1689,7 @@ select {
   text-transform: uppercase;
 }
 
-/* ── Workflow Narrative ── */
+/* ─── Workflow Narrative ─── */
 .narrative-list {
   list-style: none;
   margin: 0;
@@ -1740,7 +1740,7 @@ select {
   line-height: 1.5;
 }
 
-/* ── Recommended Next Actions ── */
+/* ─── Recommended Next Actions ─── */
 .actions-list {
   list-style: none;
   margin: 0;
@@ -1783,7 +1783,7 @@ select {
   padding-top: 2px;
 }
 
-/* ── Data Limitations ── */
+/* ─── Data Limitations ─── */
 .limitations-box {
   display: grid;
   gap: 10px;
@@ -1821,7 +1821,6 @@ select {
   line-height: 1.65;
 }
 
-/* Allow Decision Review button label to be wider */
 .segmented button {
   padding: 0 14px;
   white-space: nowrap;

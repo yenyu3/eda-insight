@@ -69,11 +69,6 @@ def _scan_begin_end(s: str) -> tuple[str, str]:
     從字串開頭掃描一個平衡 begin...end block。
     回傳 (完整 block 含 begin/end, 剩餘字串)。
     假設 s 以 'begin' 開頭。
-
-    Fast path 說明：
-    - 僅在 b/B/e/E 字元位置嘗試 regex，以減少不必要的匹配開銷
-    - \\b boundary 過濾掉 enable、byte 等非關鍵字識別字
-    - 若遇到非標準巢狀結構解析異常，可改成更保守的逐字元掃描
     """
     depth = 0
     i = 0
@@ -113,8 +108,206 @@ def _unwrap_begin_end(body: str) -> str:
     if not re.match(r'^begin\b', s, re.IGNORECASE):
         return s
     block, _ = _scan_begin_end(s)
-    # 'begin'=5 chars, 'end'=3 chars
     return block[5:-3].strip()
+
+
+# ─── 語意轉譯層 ───────────────────────────────────────────────────────────────
+
+_FSM_STATE_NAMES = {"state", "cur_state", "current_state", "next_state", "ns", "ps", "fsm_state", "state_reg"}
+_FSM_CASE_PREFIXES = tuple(f"case({s}" for s in _FSM_STATE_NAMES)
+
+SEMANTIC_TO_BUSINESS: dict[str, str] = {
+    "每次時鐘更新時觸發": "定時運作",
+    "時序邏輯更新":       "定時更新狀態",
+    "輸入一有變動立即執行": "即時反應",
+    "收到重置信號":       "系統重新開始",
+    "資料就緒且可以接收": "可以開始處理",
+    "有新資料進來":       "有新資料可處理",
+    "系統準備好了":       "可以接收資料",
+    "功能開關打開":       "功能已啟用",
+    "這輪已完成":         "任務結束了",
+    "依目前流程階段":     "走到哪個步驟了",
+    "計時信號到":         "計時器觸發",
+    "計數達到預設值":     "已達目標數量",
+    "條件判斷":           "是否符合條件",
+    "退回待機":           "等待下一個工作",
+    "標記任務完成":       "任務執行完畢",
+    "不做更動":           "繼續等待",
+    "計數 +1":            "記錄進度加一",
+    "計數歸零":           "重新開始計數",
+    "輸出新結果":         "結果已更新",
+    "準備傳送資料":       "資料準備送出",
+    "更新狀態":           "更新內部資料",
+    "省略細節":           "（簡化顯示）",
+}
+
+SIGNAL_HUMANIZE: dict[str, str] = {
+    "rst_n":    "重置訊號",
+    "rst":      "重置訊號",
+    "reset":    "重置訊號",
+    "clk":      "時鐘",
+    "valid":    "有效輸入",
+    "ready":    "就緒訊號",
+    "done":     "完成訊號",
+    "enable":   "啟用訊號",
+    "en":       "啟用訊號",
+    "state":    "目前狀態",
+    "next_state": "下一狀態",
+    "count":    "計數值",
+    "baud_tick": "計時器",
+    "baud_cnt": "波特率計數",
+    "bit_cnt":  "位元計數",
+    "tx_valid": "傳送有效訊號",
+    "tx":       "傳送資料",
+    "rx":       "接收資料",
+    "out":      "輸出",
+    "output":   "輸出",
+}
+
+
+def _humanize_signals(signals: list[str]) -> str:
+    humanized = [SIGNAL_HUMANIZE.get(sig, sig) for sig in signals]
+    if len(humanized) == 1:
+        return humanized[0]
+    return " 和 ".join(humanized)
+
+
+def _translate_condition(expr: str) -> str:
+    """把條件式轉成語意標籤（Semantic Layer）。"""
+    raw = expr.strip()
+    lower = raw.lower()
+
+    if raw.startswith("case("):
+        inner = raw[5:-1] if raw.endswith(")") else raw[5:]
+        inner = inner.strip()
+        if inner in _FSM_STATE_NAMES:
+            return "依目前流程階段"
+        return f"依 {inner} 的值分流"
+
+    if re.search(r'\brst_n\b|\brst\b|\breset\b', lower):
+        return "收到重置信號"
+
+    if re.search(r'\bvalid\b', lower) and re.search(r'\bready\b', lower):
+        return "資料就緒且可以接收"
+
+    if re.search(r'\bdone\b|\bfinish\b|\bcomplete\b', lower):
+        return "這輪已完成"
+
+    if re.search(r'^enable$|^en$', lower):
+        return "功能開關打開"
+    if re.search(r'\benable\b', lower) and len(lower) < 20:
+        return "功能開關打開"
+
+    if re.search(r'\bvalid\b', lower):
+        return "有新資料進來"
+
+    if re.search(r'\bready\b', lower):
+        return "系統準備好了"
+
+    if re.search(r'\b(?:state|ns|ps|cur_state|current_state|next_state|fsm_state)\b', lower):
+        return "依目前流程階段"
+
+    if re.search(r'\bbaud_tick\b|\bclk_tick\b|\btick\b', lower):
+        return "計時信號到"
+
+    if re.search(r'\b(?:bit_cnt|baud_cnt|count|cnt)\b.*==', lower):
+        return "計數達到預設值"
+
+    return "條件判斷"
+
+
+def _translate_process(label: str) -> str:
+    """把 assignment 標籤轉成語意描述（Semantic Layer）。"""
+    if label == "(no change)":
+        return "不做更動"
+    if label.startswith("[...]") or label.startswith("[loop:"):
+        return "省略細節"
+
+    lower = label.lower().strip()
+
+    if re.search(r'\b(?:state|next_state)\s*(?:<=|=)\s*\w*idle\b', lower):
+        return "退回待機"
+    if re.search(r'\b(?:state|next_state)\s*(?:<=|=)\s*\w*(?:done|finish|complete)\b', lower):
+        return "標記任務完成"
+    m = re.match(r'(?:state|next_state|cur_state)\s*(?:<=|=)\s*([A-Za-z_]\w*)', lower)
+    if m:
+        state_name = m.group(1).upper()
+        return f"切換到 {state_name}"
+
+    if re.search(r'\b\w*count\w*\s*(?:<=|=)\s*(?:0|\'b0|\'d0|[0-9]+\'[bBdDhH][0]+)\b', lower):
+        return "計數歸零"
+    if re.search(r'\b(?:baud_cnt|bit_cnt|cnt)\s*(?:<=|=)\s*0\b', lower):
+        return "計數歸零"
+
+    if re.search(r'\b\w*count\w*\s*(?:<=|=)\s*\w+\s*\+\s*1', lower):
+        return "計數 +1"
+    if re.search(r'\b(?:baud_cnt|bit_cnt|cnt)\s*(?:<=|=)\s*\w+\s*\+\s*1', lower):
+        return "計數 +1"
+
+    lhs_m = re.match(r'([A-Za-z_]\w*)\s*(?:<=|=)', lower)
+    if lhs_m:
+        lhs = lhs_m.group(1)
+        if re.search(r'^(?:out|output|y|result)$', lhs):
+            return "輸出新結果"
+        if re.search(r'^tx', lhs):
+            return "準備傳送資料"
+        if lhs in {"baud_cnt", "bit_cnt", "cnt"}:
+            return "計數 +1" if '+' in label else "更新計數器"
+
+    lines = [ln.strip() for ln in label.split('\n') if ln.strip() and '(+' not in ln]
+    if len(lines) > 1:
+        return f"同時更新 {len(lines)} 項資料"
+
+    return "更新狀態"
+
+
+def _to_business_label(semantic: str) -> str:
+    """把語意標籤轉成產品人話（Business Layer）。"""
+    result = SEMANTIC_TO_BUSINESS.get(semantic)
+    if result:
+        return result
+    if semantic.startswith("切換到 "):
+        return "進入下一個步驟"
+    if semantic.startswith("依 ") and semantic.endswith(" 分流"):
+        return "依條件選擇下一步"
+    if semantic.startswith("依 ") and semantic.endswith(" 的值分流"):
+        return "依條件選擇下一步"
+    if semantic.startswith("同時更新 "):
+        return "一次更新多筆資料"
+    return semantic
+
+
+def _translate_assign_intent(output: str, expression: str) -> str:
+    """給 assign 陳述句產生語意摘要。"""
+    expr = expression.strip()
+    if re.search(r'(?<![&|])[&](?![&|])', expr):
+        return "兩個條件都成立才輸出"
+    if '&&' in expr:
+        return "多個條件全部成立才輸出"
+    if re.search(r'(?<![&|])[|](?![&|])', expr) or '||' in expr:
+        return "任一條件成立就輸出"
+    if expr.startswith('~') or expr.startswith('!'):
+        return "輸出與輸入相反"
+    if '?' in expr and ':' in expr:
+        return "依條件在兩個值中選一個輸出"
+    if expr.startswith('{') or output.startswith('{'):
+        return "將多個訊號合併成一個輸出"
+    return "直接把輸入傳到輸出"
+
+
+def _semantic_trigger(trigger: str, trigger_type: str) -> str:
+    if trigger == "always_ff":
+        return "時序邏輯更新"
+    if trigger_type == "sequential":
+        return "每次時鐘更新時觸發"
+    if trigger in {"always_comb", "always_latch"}:
+        return "輸入一有變動立即執行"
+    return "輸入一有變動立即執行"
+
+
+def _business_trigger(trigger: str, trigger_type: str) -> str:
+    sem = _semantic_trigger(trigger, trigger_type)
+    return SEMANTIC_TO_BUSINESS.get(sem, sem)
 
 
 # ─── always block 尋找 ────────────────────────────────────────────────────────
@@ -151,11 +344,15 @@ def _find_always_blocks(code: str, ctx: dict) -> list[dict]:
         block_end = block_start + body.count("\n")
         nodes, edges, entry_id = _parse_body(body, block_idx, counter, ctx=ctx)
 
+        sem_trigger = _semantic_trigger(trigger, trigger_type)
+        biz_trigger = _business_trigger(trigger, trigger_type)
         trigger_node = {
             "id": start_id,
             "type": "trigger",
             "label": trigger,
             "display_label": _friendly_trigger(trigger, trigger_type),
+            "semantic_label": sem_trigger,
+            "business_label": biz_trigger,
             "detail": trigger,
             "source_line_start": block_start,
             "source_line_end": block_start,
@@ -212,23 +409,19 @@ def _parse_body(body: str, block_idx: int, counter: list, depth: int = 0, ctx: d
         nid = _next_id(block_idx, counter, "p")
         return [_process_node(nid, f"[...] {_truncate(stripped, 48)}", kind="summary")], [], nid
 
-    # Case 1: if/else-if/else chain
     if_result = _try_parse_if(stripped, block_idx, counter, depth, ctx)
     if if_result is not None:
         return if_result
 
-    # Case 2: case/casez/casex
     case_result = _try_parse_case(stripped, block_idx, counter, depth, ctx)
     if case_result is not None:
         return case_result
 
-    # Case 3: loop
     if re.match(r'\b(for|while|repeat|forever)\b', stripped, re.IGNORECASE):
         _mark_truncated(ctx, "loop_summary", 1)
         nid = _next_id(block_idx, counter, "p")
         return [_process_node(nid, f"[loop: {_truncate(stripped, 46)}]", kind="summary")], [], nid
 
-    # Case 4: 多個頂層 statement → 合併為一個 process node（修正：只顯示第一個的問題）
     stmts = _split_top_level_stmts(stripped)
     if len(stmts) > 1:
         if any(_is_structural_stmt(stmt) for stmt in stmts):
@@ -236,7 +429,6 @@ def _parse_body(body: str, block_idx: int, counter: list, depth: int = 0, ctx: d
         nid = _next_id(block_idx, counter, "p")
         return [_process_node(nid, _format_multi_stmt(stmts), assigned_signals=_assigned_from_stmts(stmts))], [], nid
 
-    # Case 5: 單一 assignment
     assign_match = re.match(r'([A-Za-z_][\w$]*(?:\s*\[[^\]]+\])?)\s*(<=|=)\s*(.+?);', stripped, re.DOTALL)
     if assign_match:
         nid = _next_id(block_idx, counter, "p")
@@ -245,28 +437,35 @@ def _parse_body(body: str, block_idx: int, counter: list, depth: int = 0, ctx: d
         rhs = _truncate(assign_match.group(3).strip(), 32)
         return [_process_node(nid, f"{lhs} {op} {rhs}", assigned_signals=[_base_signal(lhs)])], [], nid
 
-    # Fallback
     nid = _next_id(block_idx, counter, "p")
     return [_process_node(nid, _truncate(stripped, 48))], [], nid
 
 
 def _decision_node(nid: str, label: str) -> dict:
+    sem = _translate_condition(label)
+    biz = _to_business_label(sem)
     return {
         "id": nid,
         "type": "decision",
         "label": label,
         "display_label": _friendly_condition(label),
+        "semantic_label": sem,
+        "business_label": biz,
         "detail": label,
         "condition_signals": _signals_from_expr(label),
     }
 
 
 def _process_node(nid: str, label: str, assigned_signals: list[str] | None = None, kind: str = "process") -> dict:
+    sem = _translate_process(label)
+    biz = _to_business_label(sem)
     return {
         "id": nid,
         "type": "process",
         "label": label,
         "display_label": _friendly_process(label),
+        "semantic_label": sem,
+        "business_label": biz,
         "detail": label,
         "kind": kind,
         "assigned_signals": sorted(set(assigned_signals or [])),
@@ -333,13 +532,6 @@ def _is_structural_stmt(stmt: str) -> bool:
 
 
 def _parse_stmt_sequence(stmts: list[str], block_idx: int, counter: list, depth: int, ctx: dict):
-    """
-    Parse a top-level statement sequence as a flow.
-
-    Consecutive simple assignments stay grouped in one process node, but structural
-    statements such as case/if keep their own branch shape. This avoids flattening
-    common FSM code like "baud_cnt <= ...; case (state) ... endcase".
-    """
     chunks = _group_sequence_chunks(stmts)
     nodes = []
     edges = []
@@ -427,7 +619,6 @@ def _try_parse_if(body: str, block_idx: int, counter: list, depth: int, ctx: dic
     if not m:
         return None
 
-    # 用平衡括號追蹤取條件，修正非貪婪 regex 在巢狀括號時截斷的問題
     cond, after_pos = _extract_paren_cond(stripped, m.end() - 1)
     rest_after_cond = stripped[after_pos:].lstrip()
 
@@ -449,7 +640,6 @@ def _try_parse_if(body: str, block_idx: int, counter: list, depth: int, ctx: dic
         edges.append({"id": f"e_{cond_id}_yes", "source": cond_id, "target": yes_entry, "label": "YES", "kind": "branch"})
 
     if else_body:
-        # else if 會透過遞迴再次進入 _try_parse_if()，形成巢狀 decision 結構
         no_nodes, no_edges, no_entry = _parse_body(else_body, block_idx, counter, depth + 1, ctx)
         nodes += no_nodes
         edges += no_edges
@@ -467,7 +657,6 @@ def _extract_paren_cond(s: str, open_pos: int) -> tuple[str, int]:
     """
     從 open_pos 的 '(' 開始，用平衡括號追蹤，
     回傳 (括號內容, 閉括號後位置)。
-    修正 if ((a && b) || c) 這類巢狀條件被截斷的問題。
     """
     depth = 0
     i = open_pos
@@ -572,13 +761,6 @@ def _parse_case_arms_robust(case_body: str) -> list[tuple[str, str]]:
 
 
 def _find_top_level_colon(s: str, start: int) -> int:
-    """
-    找 depth 0 的 ':'，排除：
-    - begin/end 內的冒號
-    - <=, >=, != 的組合
-    - 三元運算子 ? : 的 ':'（用 ternary 計數器追蹤）
-    Fast path: 只在 b/B/e/E 字元才做 begin/end regex。
-    """
     depth = ternary = 0
     i = start
     while i < len(s):
@@ -606,12 +788,17 @@ def _find_assign_stmts(code: str) -> list[dict]:
     results = []
     pattern = re.compile(r'\bassign\s+((?:\{[^}]+\}|\w+)(?:\s*\[[^\]]+\])?)\s*=\s*(.+?);', re.DOTALL)
     for idx, m in enumerate(pattern.finditer(code)):
+        output = m.group(1).strip()
         expression = m.group(2).strip()
+        intent = _translate_assign_intent(output, expression)
         results.append({
             "id": f"as_{idx}",
-            "output": m.group(1).strip(),
+            "output": output,
             "expression": _truncate(expression, 48),
             "input_signals": _signals_from_expr(expression),
+            "intent_label": intent,
+            "semantic_label": intent,
+            "business_label": intent,
         })
     return results
 
@@ -693,10 +880,6 @@ def _friendly_process(label: str) -> str:
     return label
 
 
-_FSM_STATE_NAMES = {"state", "cur_state", "current_state", "next_state", "ns", "ps", "fsm_state", "state_reg"}
-_FSM_CASE_PREFIXES = tuple(f"case({s}" for s in _FSM_STATE_NAMES)
-
-
 def _infer_block_role(nodes: list[dict], assigned_signals: list[str], trigger_type: str) -> str:
     decision_labels = [node.get("label", "") for node in nodes if node.get("type") == "decision"]
     assigned_set = set(assigned_signals)
@@ -711,50 +894,74 @@ def _infer_block_role(nodes: list[dict], assigned_signals: list[str], trigger_ty
     return "logic"
 
 
-def _block_title(block_idx: int, trigger: str, role: str) -> str:
+def _block_title(block_idx: int, _trigger: str, role: str) -> str:
     role_labels = {
-        "fsm": "FSM / state logic",
-        "output_decode": "Output decode",
-        "register_update": "Register update",
-        "logic": "Logic block",
+        "fsm":             "流程狀態管理",
+        "output_decode":   "輸出即時計算",
+        "register_update": "資料定期更新",
+        "logic":           "邏輯處理區塊",
     }
-    return f"{role_labels.get(role, 'Logic block')} - {trigger if trigger != '*' else 'always @(*)'}"
+    label = role_labels.get(role, "邏輯處理區塊")
+    if block_idx > 0:
+        return f"{label} #{block_idx + 1}"
+    return label
 
 
 def _summarize_block(
-    trigger: str,
-    trigger_type: str,
+    _trigger: str,
+    _trigger_type: str,
     role: str,
     assigned_signals: list[str],
     condition_signals: list[str],
     nodes: list[dict],
 ) -> str:
-    updates = ", ".join(assigned_signals[:4]) if assigned_signals else "no obvious signal"
-    controls = ", ".join(condition_signals[:4]) if condition_signals else "no explicit condition"
+    role_base = {
+        "fsm":             "管理電路的狀態流程",
+        "output_decode":   "根據輸入即時計算輸出",
+        "register_update": "定期更新內部資料暫存器",
+        "logic":           "執行邏輯運算",
+    }
+    base = role_base.get(role, "執行邏輯運算")
+
+    if condition_signals:
+        key_conds = _humanize_signals(condition_signals[:2])
+        base += f"，根據{key_conds}決定行為"
+    if assigned_signals:
+        key_updates = _humanize_signals(assigned_signals[:2])
+        base += f"，更新{key_updates}"
+
     if role == "fsm":
         states = _state_labels(nodes)
-        state_text = f" States include {', '.join(states[:5])}." if states else ""
-        return f"This state logic updates {updates} and is controlled by {controls}.{state_text}"
-    if trigger_type == "sequential":
-        return f"This clocked block updates {updates} and is controlled by {controls}."
-    return f"This combinational block updates {updates} and is controlled by {controls}."
+        if states:
+            base += f"。包含 {', '.join(states[:4])} 等流程階段"
+
+    return base + "。"
 
 
 def _summarize_flowchart(always_blocks: list[dict], assign_blocks: list[dict]) -> str:
+    role_name_map = {
+        "fsm":             "狀態流程管理",
+        "output_decode":   "輸出計算",
+        "register_update": "資料更新",
+        "logic":           "邏輯運算",
+    }
     parts = []
     if always_blocks:
-        roles = {}
+        roles: dict[str, int] = {}
         for block in always_blocks:
-            roles[block.get("block_role", "logic")] = roles.get(block.get("block_role", "logic"), 0) + 1
-        role_names = []
+            r = block.get("block_role", "logic")
+            roles[r] = roles.get(r, 0) + 1
+        role_parts = []
         for role, count in roles.items():
-            name = role.replace("_", " ")
-            role_names.append(f"{count} {name} block" + ("" if count == 1 else "s"))
-        parts.append(", ".join(role_names))
+            name = role_name_map.get(role, role)
+            role_parts.append(f"{count} 個{name}區塊")
+        parts.append("、".join(role_parts))
     if assign_blocks:
         count = len(assign_blocks)
-        parts.append(f"{count} continuous assign" + ("" if count == 1 else "s"))
-    return "Detected " + ("; ".join(parts) if parts else "no procedural or assign logic.")
+        parts.append(f"{count} 個即時計算邏輯")
+    if not parts:
+        return "未偵測到邏輯區塊。"
+    return "偵測到 " + "；".join(parts) + "。"
 
 
 def _state_labels(nodes: list[dict]) -> list[str]:
@@ -768,15 +975,6 @@ def _state_labels(nodes: list[dict]) -> list[str]:
 
 
 def _build_state_diagram(always_blocks: list[dict]) -> dict | None:
-    """
-    從 FSM block 中建立近似的 state transition diagram。
-
-    注意：
-    - 這是 heuristic-derived 的結果，不是嚴格的 FSM 語意還原
-    - 依賴 case arm label 與 state 訊號命名來推斷 state 名稱
-    - 若 Verilog 使用非標準命名或參數化 state，可能無法正確識別
-    - 回傳 None 表示無法偵測到 FSM 結構
-    """
     states = set()
     transitions = []
     for block in always_blocks:
@@ -809,7 +1007,7 @@ def _build_state_diagram(always_blocks: list[dict]) -> dict | None:
     return {
         "states": sorted(states),
         "transitions": transitions,
-        "summary": f"Detected {len(states)} state(s) and {len(transitions)} transition update(s).",
+        "summary": f"偵測到 {len(states)} 個狀態與 {len(transitions)} 條狀態轉換路徑。",
     }
 
 
@@ -834,17 +1032,6 @@ def _reachable_state_update_nodes(start_id: str, node_by_id: dict, adjacency: di
 # ─── 訊號依賴對照表 ───────────────────────────────────────────────────────────
 
 def _build_signal_dependency_map(always_blocks: list[dict], assign_blocks: list[dict]) -> dict:
-    """
-    建立跨 block 的訊號讀寫對照表。
-
-    回傳格式：
-    {
-        "state": {"written_by": ["ab_0"], "read_by": ["ab_0", "ab_1"]},
-        "clk":   {"written_by": [],       "read_by": ["ab_0"]},
-    }
-
-    注意：這是依靜態解析結果建立的近似對照表，不保證涵蓋所有隱含依賴。
-    """
     dep_map: dict[str, dict] = {}
 
     def _ensure(sig: str) -> None:

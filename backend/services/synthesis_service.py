@@ -55,7 +55,7 @@ def run_synthesis_stage(
         _save_debug_advice(run_id, "synthesis", err, run_dir)
         return
 
-    # 優先解析 synth.json；若 json 不可用或結果不完整，再 fallback 到文字 report
+    # 優先解析 synth.json，不完整時 fallback 到文字 report
     synth_data = {}
     if os.path.exists(synth_json):
         try:

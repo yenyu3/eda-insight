@@ -15,10 +15,7 @@ try:
 except ImportError:
     genai = None
 
-# 模組層級單例（延遲初始化）
-# _mock=True 表示目前使用 mock 模式：
-# 1. 使用者明確開啟 USE_MOCK_AI
-# 2. provider 初始化失敗，退回 mock
+# AI engine 以模組層級單例延遲初始化
 _ai_engine: "AIEngine | None" = None
 
 
@@ -88,9 +85,7 @@ class AIEngine:
             self.client = None
             self._mock = True
 
-    # ------------------------------------------------------------------
-    # 1. verilog_insight — 電路功能說明（streaming）
-    # ------------------------------------------------------------------
+    # ─── Verilog Insight ───
 
     def verilog_insight(self, parser_result: dict) -> Generator[str, None, None]:
         """根據 verilog_parser 輸出生成電路功能說明（串流版本）。"""
@@ -109,9 +104,7 @@ class AIEngine:
 Verilog 解析結果：{json.dumps(parser_result, ensure_ascii=False)[:2000]}"""
         yield from self._stream(prompt)
 
-    # ------------------------------------------------------------------
-    # 2. workflow_planner — 動態 pipeline 規劃
-    # ------------------------------------------------------------------
+    # ─── Workflow Planner ───
 
     def workflow_planner(self, verilog_insight: str, user_goals: str) -> dict:
         """根據電路資訊與使用者目標，決定本次 pipeline 要執行哪些步驟。"""
@@ -147,9 +140,7 @@ steps 只能從 ["lint", "simulate", "synthesize", "dependency"] 中選擇，可
         except Exception:
             return fallback
 
-    # ------------------------------------------------------------------
-    # 3. log_insight — EDA log 分析
-    # ------------------------------------------------------------------
+    # ─── Log Insight ───
 
     def log_insight(self, log_text: str) -> dict:
         """分析 Icarus Verilog / Yosys 的 stdout log，回傳結構化摘要。"""
@@ -176,9 +167,7 @@ Log 內容（最多 2000 字元）：
         except Exception as e:
             return {"events": [], "warnings": [], "summary": f"分析失敗：{e}"}
 
-    # ------------------------------------------------------------------
-    # 4. debug_advisor — 錯誤診斷（streaming）
-    # ------------------------------------------------------------------
+    # ─── Debug Advisor ───
 
     def debug_advisor(self, stderr_text: str, verilog_content: str) -> Generator[str, None, None]:
         """分析 EDA 工具的 stderr 錯誤訊息，串流回傳修正建議。"""
@@ -200,9 +189,7 @@ Verilog 程式碼：
 {verilog_content[:1500]}"""
         yield from self._stream(prompt)
 
-    # ------------------------------------------------------------------
-    # 5. risk_analyzer — 設計風險評估
-    # ------------------------------------------------------------------
+    # ─── Risk Analyzer ───
 
     def risk_analyzer(self, synthesis_result: dict, waveform_stats: dict) -> dict:
         """根據合成指標與波形統計，回傳風險評分（0-10）。"""
@@ -237,9 +224,7 @@ JSON 字串值內不要使用 Markdown、星號粗體、項目符號或標題語
                 "summary": f"分析失敗：{e}",
             }
 
-    # ------------------------------------------------------------------
-    # 6. bottleneck_detector — 瓶頸節點識別
-    # ------------------------------------------------------------------
+    # ─── Bottleneck Detector ───
 
     def bottleneck_detector(self, dag_result: dict) -> dict:
         """根據 dependency graph 識別瓶頸節點，提供優化建議。"""
@@ -274,9 +259,7 @@ DAG 資訊：{json.dumps(dag_result, ensure_ascii=False)[:1500]}"""
                 "suggestions": "",
             }
 
-    # ------------------------------------------------------------------
-    # 7. compare_tradeoff — 兩版本 PPA 比較
-    # ------------------------------------------------------------------
+    # ─── Compare Tradeoff ───
 
     def compare_tradeoff(
         self,
@@ -315,9 +298,7 @@ Comparison JSON:
         except Exception:
             return fallback
 
-    # ------------------------------------------------------------------
-    # 內部工具方法
-    # ------------------------------------------------------------------
+    # ─── 內部工具方法 ───
 
     def _stream(self, prompt: str) -> Generator[str, None, None]:
         if self.provider == "gemini":
@@ -349,9 +330,7 @@ Comparison JSON:
         return response.content[0].text
 
 
-# ------------------------------------------------------------------
-# 模組層級工具函式
-# ------------------------------------------------------------------
+# ─── 模組層級工具函式 ───
 
 def _compact_compare_version(version: dict) -> dict:
     keys = (

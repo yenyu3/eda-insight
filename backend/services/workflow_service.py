@@ -30,7 +30,7 @@ def run_pipeline(
     run_dir = os.path.dirname(verilog_path)
     db_manager.update_run_status(run_id, "running")
 
-    # Stage 1: Verilog 靜態解析（失敗則整個 pipeline 終止）
+    # Stage 1: Verilog 靜態解析
     try:
         parser_result = run_parse_stage(run_id, verilog_content, run_dir)
     except Exception as e:
@@ -82,9 +82,7 @@ def run_pipeline(
     db_manager.update_run_status(run_id, "error" if has_core_error else "done")
 
 
-# ------------------------------------------------------------------
-# 內部 stage 實作
-# ------------------------------------------------------------------
+# ─── 內部 stage 實作 ───
 
 def _stage_dependency(run_id: str, parser_result: dict) -> dict:
     t0 = time.time()
@@ -134,9 +132,7 @@ def _stage_ai_report(run_id: str) -> None:
         db_manager.upsert_stage_log(run_id, "ai_report", "error", msg, duration)
 
 
-# ------------------------------------------------------------------
-# Pipeline 步驟選擇
-# ------------------------------------------------------------------
+# ─── Pipeline 步驟選擇 ───
 
 def _select_pipeline(run_id: str, parser_result: dict, goals) -> list[str]:
     """依環境變數決定使用固定 pipeline 或 AI 動態規劃。"""

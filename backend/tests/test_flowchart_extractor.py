@@ -2,7 +2,7 @@ import unittest
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]   # eda-insight/
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from eda_tools.flowchart_extractor import extract_flowchart

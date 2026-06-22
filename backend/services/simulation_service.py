@@ -74,7 +74,7 @@ def run_simulation_stage(run_id: str, run_dir: str) -> str | None:
     ]
 
     if vcd_files:
-        # 若有多個 VCD，先取第一個；若未來可能有多個，建議改成明確規則挑選
+        # 多個 VCD 暫取第一個
         vcd_path = vcd_files[0]
         try:
             vcd_data = parse_vcd(vcd_path)

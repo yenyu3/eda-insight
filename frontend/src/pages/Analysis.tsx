@@ -24,7 +24,7 @@ interface Verdict {
   confidence: 'high' | 'medium' | 'low'
 }
 
-// ── Computed decision helpers ──────────────────────────────────────
+// ─── Computed decision helpers ───────────────────────────────────────────────
 
 function computeReadinessScore(
   result: AnalysisResult | undefined,
@@ -36,28 +36,23 @@ function computeReadinessScore(
 
   let score = 0
 
-  // Pipeline completion (25 pts)
   score += hasError ? 5 : 25
 
-  // Simulation quality (20 pts)
   const simStage = stages.find((s) => s.name === 'simulation')
   const hasWaveform = (result?.waveform?.signals?.length ?? 0) > 0
   if (simStage?.status === 'done' && hasWaveform) score += 20
   else if (simStage?.status === 'done') score += 10
 
-  // Synthesis quality (20 pts)
   const synthStage = stages.find((s) => s.name === 'synthesis')
   const hasSynthData = (result?.synthesis?.cell_count ?? null) != null
   if (synthStage?.status === 'done' && hasSynthData) score += 20
   else if (synthStage?.status === 'done') score += 10
 
-  // Lint cleanliness (15 pts)
   const lintCount = result?.lint_issues?.length ?? 0
   if (lintCount === 0) score += 15
   else if (lintCount <= 2) score += 10
   else if (lintCount <= 5) score += 5
 
-  // Risk quality (20 pts)
   const risks = result?.risk_scores
   if (risks) {
     const maxRisk = Math.max(
@@ -70,7 +65,7 @@ function computeReadinessScore(
     else if (maxRisk < 7) score += 8
     else score += 2
   } else {
-    score += 10 // partial credit when risk analysis not yet run
+    score += 10
   }
 
   return Math.min(100, score)
@@ -244,7 +239,7 @@ function computeLimitations(result: AnalysisResult | undefined, isDone: boolean)
   return lims
 }
 
-// ── Style helpers ──────────────────────────────────────────────────
+// ─── Style helpers ───────────────────────────────────────────────────────────
 
 function statusClass(status: StageStatus | undefined) {
   if (status === 'done') return 'bg-emerald-500'
@@ -277,7 +272,7 @@ function CheckIcon() {
   )
 }
 
-// ── Component ─────────────────────────────────────────────────────
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export default function Analysis() {
   const { runId } = useParams<{ runId: string }>()
@@ -345,13 +340,11 @@ export default function Analysis() {
   const doneStages = stages.filter((s) => s.status === 'done').length
   const progressPct = stages.length ? Math.round((doneStages / stages.length) * 100) : 0
 
-  // Decision Review computed values
   const readinessScore = computeReadinessScore(result, isDone, hasError, stages)
   const verdict = computeVerdict(result, isDone, hasError, stages)
   const verdictStyle = verdictConfig[verdict.verdict]
   const nextActions = computeNextActions(result, verdict.verdict, stages)
   const limitations = computeLimitations(result, isDone)
-  // ai_plan is a meta-stage; exclude from the narrative list
   const narrativeStages = stages.filter((s) => s.name !== 'ai_plan')
 
   async function shareRun() {
@@ -446,8 +439,6 @@ export default function Analysis() {
         </aside>
 
         <div className="analysis-content">
-
-          {/* ── Technical View ── */}
           {view === 'tech' && (
             <>
               <section className="surface-card panel">
@@ -541,11 +532,8 @@ export default function Analysis() {
               ) : null}
             </>
           )}
-
-          {/* ── Decision Review ── */}
           {view === 'decision' && (
             <>
-              {/* 1. Design Readiness Card */}
               <section className="surface-card panel">
                 <h2 className="panel-title">Design Readiness</h2>
                 <div className="readiness-card">
@@ -582,7 +570,6 @@ export default function Analysis() {
                 </div>
               </section>
 
-              {/* 2. Workflow Narrative */}
               {narrativeStages.length > 0 && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Workflow Narrative</h2>
@@ -600,7 +587,6 @@ export default function Analysis() {
                 </section>
               )}
 
-              {/* 3. Risk Scores */}
               {!isDone && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Decision Evidence</h2>
@@ -630,13 +616,11 @@ export default function Analysis() {
                 </section>
               )}
 
-              {/* 4. Evidence-based AI Review */}
               <section className="surface-card panel">
                 <h2 className="panel-title">AI Review</h2>
                 <AIInsightPanel runId={runId} enabled={isDone && !resultLoading} />
               </section>
 
-              {/* 5. Bottleneck Analysis */}
               {result?.bottleneck_analysis && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Bottleneck Analysis</h2>
@@ -661,7 +645,6 @@ export default function Analysis() {
                 </section>
               )}
 
-              {/* 6. Recommended Next Actions */}
               {nextActions.length > 0 && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Recommended Next Actions</h2>
@@ -676,7 +659,6 @@ export default function Analysis() {
                 </section>
               )}
 
-              {/* 7. Data Limitations */}
               {limitations.length > 0 && (
                 <section className="surface-card panel">
                   <h2 className="panel-title">Data Limitations</h2>

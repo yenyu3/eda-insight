@@ -127,7 +127,7 @@ def _compute_stats(timeline: dict, parse_errors: list[str]) -> dict:
         )
         switching_activity[sig] = transitions
 
-        # 以多個 rising edge 的平均間距估算 clock period
+        # 以多個 rising edge 平均間距估算 clock period
         sig_lower = _short_name(sig).lower()
         if sig_lower == "clk" or sig_lower.endswith("_clk") or sig_lower.endswith("clk"):
             rising_edges = [

@@ -116,6 +116,8 @@ export interface FlowNode {
   type: FlowNodeType
   label: string
   display_label?: string
+  semantic_label?: string
+  business_label?: string
   detail?: string
   kind?: 'process' | 'summary'
   assigned_signals?: string[]
@@ -152,6 +154,9 @@ export interface AssignBlock {
   output: string
   expression: string
   input_signals?: string[]
+  intent_label?: string
+  semantic_label?: string
+  business_label?: string
 }
 
 export interface FlowchartData {
