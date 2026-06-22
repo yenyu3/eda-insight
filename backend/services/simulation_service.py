@@ -141,6 +141,8 @@ def _save_debug_advice(run_id: str, stage: str, stderr_text: str, run_dir: str) 
             if advice
             else f"[{stage} debug advisor]\nNo advice generated."
         )
+        if getattr(engine, "is_mock", False):
+            summary = summary if summary.startswith("Mock:") else f"Mock: {summary}"
 
         db_manager.update_run_field(run_id, "ai_summary", summary)
         db_manager.upsert_stage_log(run_id, "ai_report", "done", summary[:1000])

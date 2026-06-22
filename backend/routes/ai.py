@@ -1,7 +1,7 @@
 import json
 import time
 
-from flask import Blueprint, jsonify, Response, stream_with_context
+from flask import Blueprint, Response, jsonify, stream_with_context
 
 import db_manager
 from services.ai_service import get_ai_engine
@@ -12,21 +12,18 @@ bp = Blueprint("ai", __name__)
 @bp.route("/api/stream/<run_id>", methods=["GET"])
 def stream(run_id: str):
     """
-    串流推送 AI 分析文字（Server-Sent Events）。
+    Stream the AI report for a run with Server-Sent Events.
 
-    流程：
-    1. 檢查 run 是否存在
-    2. 若已有 ai_summary，直接串流輸出
-    3. 若尚未完成，短暫輪詢等待 pipeline 完成
-    4. 若仍無 ai_summary，fallback 到 AI engine 即時生成
+    The endpoint waits for the pipeline-generated report when possible. If a
+    completed run has no stored report, it falls back to generating insight
+    from the parser result.
     """
     run = db_manager.get_run(run_id)
     if not run:
-        return jsonify({"error": "run_id 不存在", "code": "RUN_NOT_FOUND"}), 404
+        return jsonify({"error": "run_id not found", "code": "RUN_NOT_FOUND"}), 404
 
     def generate():
         try:
-            # 等待既有 ai_summary 或 pipeline 結束
             latest = None
             for _ in range(120):
                 latest = db_manager.get_run(run_id)
@@ -36,7 +33,7 @@ def stream(run_id: str):
 
                 summary = latest.get("ai_summary")
                 if summary:
-                    yield from _stream_text(summary)
+                    yield _sse({"type": "text", "content": summary})
                     yield _sse({"type": "done"})
                     return
 
@@ -44,7 +41,7 @@ def stream(run_id: str):
                 if status == "error":
                     yield _sse({
                         "type": "error",
-                        "content": "pipeline failed; AI summary unavailable",
+                        "content": "pipeline failed; AI report unavailable",
                     })
                     return
 
@@ -54,7 +51,6 @@ def stream(run_id: str):
                 yield ": keep-alive\n\n"
                 time.sleep(1)
 
-            # fallback 用 parser_result 即時生成摘要
             if not latest or latest.get("status") != "done":
                 yield _sse({"type": "error", "content": "pipeline timeout"})
                 return
@@ -65,7 +61,7 @@ def stream(run_id: str):
             if not parser_result:
                 yield _sse({
                     "type": "error",
-                    "content": "parser_result is empty; cannot generate AI summary",
+                    "content": "parser_result is empty; cannot generate AI report",
                 })
                 return
 
@@ -89,17 +85,4 @@ def stream(run_id: str):
 
 
 def _sse(payload: dict) -> str:
-    """將 payload 包裝成 SSE data event。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-def _stream_text(text: str, chunk_size: int = 80):
-    """
-    將長文字切塊並串流輸出，模擬打字機效果。
-
-    chunk_size:
-        每次輸出的字元數，預設 80。
-    """
-    for i in range(0, len(text), chunk_size):
-        yield _sse({"type": "text", "content": text[i:i + chunk_size]})
-        time.sleep(0.02)

@@ -26,6 +26,46 @@ interface Verdict {
 
 // ─── Computed decision helpers ───────────────────────────────────────────────
 
+function isMockText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().startsWith('Mock:')
+}
+
+function isMockResult(result: AnalysisResult | undefined): boolean {
+  if (!result) return false
+
+  const risks = result.risk_scores
+  const bottleneck = result.bottleneck_analysis
+  return Boolean(
+    isMockText(result.ai_summary) ||
+      isMockText(risks?.summary) ||
+      risks?.evidence?.some(isMockText) ||
+      risks?.next_actions?.some(isMockText) ||
+      risks?.limitations?.some(isMockText) ||
+      isMockText(bottleneck?.impact) ||
+      isMockText(bottleneck?.suggestions) ||
+      bottleneck?.limitations?.some(isMockText)
+  )
+}
+
+function ensureMockPrefix(text: string): string {
+  const value = text.trim()
+  return value.startsWith('Mock:') ? value : `Mock: ${value}`
+}
+
+function uniqueNonEmpty(items: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const item of items) {
+    const text = item?.trim()
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    result.push(text)
+  }
+
+  return result
+}
+
 function computeReadinessScore(
   result: AnalysisResult | undefined,
   isDone: boolean,
@@ -77,6 +117,23 @@ function computeVerdict(
   hasError: boolean,
   stages: Stage[]
 ): Verdict {
+  if (isMockResult(result)) {
+    const risks = result?.risk_scores
+    return {
+      verdict: 'REVIEW NEEDED',
+      headline: ensureMockPrefix(
+        risks?.summary ||
+          '目前設計整體風險偏低，模擬與合成摘要看起來一致，適合進入下一輪人工檢查。'
+      ),
+      reasons: uniqueNonEmpty(
+        risks?.evidence?.length
+          ? risks.evidence.map(ensureMockPrefix)
+          : ['Mock: 模擬與合成摘要看起來一致，沒有顯示明顯失敗訊號。']
+      ).slice(0, 1),
+      confidence: 'medium',
+    }
+  }
+
   if (!isDone) {
     return {
       verdict: 'INSUFFICIENT DATA',
@@ -196,28 +253,39 @@ function computeNextActions(
   verdict: VerdictType,
   stages: Stage[]
 ): string[] {
+  const aiActions = uniqueNonEmpty(result?.risk_scores?.next_actions ?? [])
+  if (isMockResult(result)) {
+    return [
+      ensureMockPrefix(
+        aiActions[0] ||
+          '建議確認 waveform 是否符合預期，並比較下一版的 cell count 與 warning 數量。'
+      ),
+    ]
+  }
+  if (aiActions.length > 0) return aiActions.slice(0, 3)
+
   const actions: string[] = []
   const hasWaveform = (result?.waveform?.signals?.length ?? 0) > 0
   const simStage = stages.find((s) => s.name === 'simulation')
   const lintCount = result?.lint_issues?.length ?? 0
 
   if (verdict === 'BLOCKED') {
-    actions.push('Resolve EDA stage errors before continuing — check the Live Log in Technical View.')
+    actions.push('先修正 EDA stage 錯誤，再回到 Technical View 檢查 Live Log。')
   }
   if (simStage?.status === 'done' && !hasWaveform) {
-    actions.push('Add $dumpfile and $dumpvars to the testbench to capture waveform evidence.')
+    actions.push('在 testbench 補上 $dumpfile 與 $dumpvars，讓後續 run 可以產生 waveform 證據。')
   }
   if (lintCount > 0) {
-    actions.push(`Fix ${lintCount} lint issue${lintCount !== 1 ? 's' : ''} to ensure design correctness before tapeout.`)
+    actions.push(`先修正 ${lintCount} 個 lint issue，再進行下一輪設計比較。`)
   }
   if (
     (result?.synthesis?.critical_path_ns ?? null) == null &&
     stages.find((s) => s.name === 'synthesis')?.status === 'done'
   ) {
-    actions.push('Run a timing-aware flow (e.g., OpenROAD) for signoff-level timing analysis.')
+    actions.push('使用 OpenROAD 或商用工具補做 timing-aware flow，取得 signoff 等級 timing 資料。')
   }
   if (verdict === 'READY') {
-    actions.push('Compare this run against a previous version to track design evolution.')
+    actions.push('將這次 run 與前一版比較，確認資源、warning 與功能行為是否持續改善。')
   }
 
   return actions.slice(0, 3)
@@ -225,18 +293,32 @@ function computeNextActions(
 
 function computeLimitations(result: AnalysisResult | undefined, isDone: boolean): string[] {
   if (!isDone) return []
-  const lims: string[] = []
+  const aiLimitations = uniqueNonEmpty([
+    ...(result?.risk_scores?.limitations ?? []),
+    ...(result?.bottleneck_analysis?.limitations ?? []),
+  ])
+
+  if (isMockResult(result)) {
+    return [
+      ensureMockPrefix(
+        aiLimitations[0] ||
+          '這是展示用資料，不能代表真實 timing、功能驗證或 dependency critical path。'
+      ),
+    ]
+  }
+
+  const lims: string[] = [...aiLimitations]
   if ((result?.synthesis?.critical_path_ns ?? null) == null) {
     lims.push(
-      'Timing data (critical path, slack) is unavailable — the Yosys-only flow does not provide full STA timing by default. Use OpenROAD or a commercial tool for signoff-level timing.'
+      '目前沒有 critical path 或 slack 資料；Yosys-only flow 預設不提供完整 STA timing，建議使用 OpenROAD 或商用工具補齊。'
     )
   }
   if (!(result?.waveform?.signals?.length)) {
     lims.push(
-      'No waveform was captured — functional coverage cannot be confirmed without simulation output. Add $dumpfile/$dumpvars to the testbench.'
+      '目前沒有 waveform；若沒有模擬輸出，就無法確認功能行為覆蓋程度，建議在 testbench 補上 $dumpfile/$dumpvars。'
     )
   }
-  return lims
+  return uniqueNonEmpty(lims).slice(0, 4)
 }
 
 // ─── Style helpers ───────────────────────────────────────────────────────────
@@ -617,7 +699,7 @@ export default function Analysis() {
               )}
 
               <section className="surface-card panel">
-                <h2 className="panel-title">AI Review</h2>
+                <h2 className="panel-title">AI Decision Summary</h2>
                 <AIInsightPanel runId={runId} enabled={isDone && !resultLoading} />
               </section>
 

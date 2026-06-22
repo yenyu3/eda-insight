@@ -39,12 +39,14 @@ def run_pipeline(
         return
 
     pipeline = _select_pipeline(run_id, parser_result, steps)
+    had_nonfatal_error = False
 
     # Stage 2: Lint
     if "lint" in pipeline:
         try:
             run_lint_stage(run_id, parser_result)
         except Exception as e:
+            had_nonfatal_error = True
             db_manager.upsert_stage_log(run_id, "lint", "error", f"{type(e).__name__}: {e}")
 
     # Stage 3: Simulate
@@ -52,6 +54,7 @@ def run_pipeline(
         try:
             run_simulation_stage(run_id, run_dir)
         except Exception as e:
+            had_nonfatal_error = True
             err = f"{type(e).__name__}: {e}"
             db_manager.upsert_stage_log(run_id, "simulation", "error", err)
 
@@ -60,6 +63,7 @@ def run_pipeline(
         try:
             _stage_dependency(run_id, parser_result)
         except Exception as e:
+            had_nonfatal_error = True
             db_manager.upsert_stage_log(run_id, "dep_analysis", "error", f"{type(e).__name__}: {e}")
 
     # Stage 5: Synthesize
@@ -67,19 +71,18 @@ def run_pipeline(
         try:
             run_synthesis_stage(run_id, verilog_path, run_dir, parser_result)
         except Exception as e:
+            had_nonfatal_error = True
             err = f"{type(e).__name__}: {e}"
             db_manager.upsert_stage_log(run_id, "synthesis", "error", err)
 
-    # 判斷整體結果並觸發 AI 報告
-    stage_logs = {s["stage"]: s["status"] for s in db_manager.get_stage_logs(run_id)}
-    has_core_error = any(
-        status == "error"
-        for stage, status in stage_logs.items()
-        if stage != "ai_report"
-    )
-    if not has_core_error:
-        _stage_ai_report(run_id)
-    db_manager.update_run_status(run_id, "error" if has_core_error else "done")
+    # 觸發 AI 報告（即使部分 stage 失敗仍繼續）
+    try:
+        _stage_ai_report(run_id, had_nonfatal_error=had_nonfatal_error)
+    except Exception as e:
+        had_nonfatal_error = True
+        db_manager.upsert_stage_log(run_id, "ai_report", "error", f"{type(e).__name__}: {e}")
+
+    db_manager.update_run_status(run_id, "error" if had_nonfatal_error else "done")
 
 
 # ─── 內部 stage 實作 ───
@@ -100,7 +103,7 @@ def _stage_dependency(run_id: str, parser_result: dict) -> dict:
     return dag
 
 
-def _stage_ai_report(run_id: str) -> None:
+def _stage_ai_report(run_id: str, had_nonfatal_error: bool = False) -> None:
     """所有核心 stage 完成後，執行 log insight + risk scoring + bottleneck detection。"""
     t0 = time.time()
     db_manager.upsert_stage_log(run_id, "ai_report", "running", "Generating log insight and risk scores.")
@@ -120,6 +123,10 @@ def _stage_ai_report(run_id: str) -> None:
         risk_scores = engine.risk_analyzer(synthesis, waveform_stats)
         bottleneck_analysis = engine.bottleneck_detector(dependency_graph)
         summary = format_ai_summary(log_insight, risk_scores, bottleneck_analysis)
+        if had_nonfatal_error:
+            summary = _prefix_warning(summary)
+        if getattr(engine, "is_mock", False):
+            summary = _ensure_mock_prefix(summary)
 
         db_manager.update_run_field(run_id, "ai_summary", summary)
         db_manager.update_run_field(run_id, "risk_scores", risk_scores)
@@ -130,6 +137,7 @@ def _stage_ai_report(run_id: str) -> None:
         duration = int((time.time() - t0) * 1000)
         msg = f"{type(e).__name__}: {e}"
         db_manager.upsert_stage_log(run_id, "ai_report", "error", msg, duration)
+        raise
 
 
 # ─── Pipeline 步驟選擇 ───
@@ -200,6 +208,18 @@ def _normalize_steps(goals) -> list[str]:
         if step in config.VALID_STEPS and step not in normalized:
             normalized.append(step)
     return [step for step in config.FIXED_PIPELINE if step in set(normalized)]
+
+
+def _ensure_mock_prefix(text: str) -> str:
+    text = (text or "").strip()
+    return text if text.startswith("Mock:") else f"Mock: {text}"
+
+
+def _prefix_warning(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return "Warning: 部分 stage 發生錯誤，因此以下 AI report 可能是降級版。"
+    return f"Warning: 部分 stage 發生錯誤，因此以下 AI report 可能是降級版。\n\n{text}"
 
 
 def _parser_result_summary(parser_result: dict) -> str:

@@ -101,12 +101,18 @@ export interface RiskScores {
   function_risk?: number
   function?: number
   summary?: string
+  evidence?: string[]
+  next_actions?: string[]
+  confidence?: 'high' | 'medium' | 'low' | string
+  limitations?: string[]
 }
 
 export interface BottleneckAnalysis {
   bottlenecks: string[]
   impact: string
   suggestions: string
+  confidence?: 'high' | 'medium' | 'low' | string
+  limitations?: string[]
 }
 
 export type FlowNodeType = 'trigger' | 'decision' | 'process'

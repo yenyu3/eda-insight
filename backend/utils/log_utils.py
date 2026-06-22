@@ -53,46 +53,49 @@ def format_ai_summary(
     risk_scores: dict,
     bottleneck_analysis: dict | None = None,
 ) -> str:
-    """將 log_insight / risk_scores / bottleneck_analysis 組裝成可供前端展示的純文字摘要。
-
-    注意：section 標題（AI LOG INTERPRETATION / WARNINGS / RISK SCORES 等）
-    為固定英文字串，供 frontend/AIFormattedText.tsx 解析用，請勿更改。
-    """
+    """組裝 AI 決策摘要，避免重複 RiskPanel / Bottleneck 區塊的詳細內容。"""
     summary = (log_insight or {}).get("summary") or "Log analysis completed."
     warnings = (log_insight or {}).get("warnings") or []
-    events = (log_insight or {}).get("events") or []
+    log_limitations = (log_insight or {}).get("limitations") or []
+    risk_summary = (risk_scores or {}).get("summary") or ""
+    evidence = (risk_scores or {}).get("evidence") or []
+    next_actions = (risk_scores or {}).get("next_actions") or []
+    risk_limitations = (risk_scores or {}).get("limitations") or []
+    confidence = (risk_scores or {}).get("confidence")
+    bottleneck_limitations = (bottleneck_analysis or {}).get("limitations") or []
 
-    parts = ["AI LOG INTERPRETATION", summary]
+    conclusion_lines = [summary.strip()]
+    if risk_summary and risk_summary.strip() and risk_summary.strip() != summary.strip():
+        conclusion_lines.append(risk_summary.strip())
+
+    parts = ["結論", "\n".join(conclusion_lines)]
+
+    key_evidence = []
+    key_evidence.extend(str(item) for item in evidence[:3] if item)
 
     if warnings:
-        warning_block = "\n".join(f"- {w}" for w in warnings[:5])
-        parts.append("WARNINGS\n" + warning_block)
-
-    if events:
-        event_block = "\n".join(f"- {e}" for e in events[:5])
-        parts.append("EVENTS\n" + event_block)
-
-    if risk_scores:
-        risk_summary = (risk_scores.get("summary") or "").strip()
-        risk_block = (
-            f"Timing: {risk_scores.get('timing_risk', 'N/A')}\n"
-            f"Area: {risk_scores.get('area_risk', 'N/A')}\n"
-            f"Function: {risk_scores.get('function_risk', 'N/A')}"
-        )
-        if risk_summary:
-            risk_block += f"\n{risk_summary}"
-        parts.append("RISK SCORES\n" + risk_block)
+        key_evidence.extend(f"工具 warning/error: {w}" for w in warnings[:2])
 
     if bottleneck_analysis:
         bottlenecks = bottleneck_analysis.get("bottlenecks") or []
-        impact = (bottleneck_analysis.get("impact") or "").strip()
-        suggestions = (bottleneck_analysis.get("suggestions") or "").strip()
+        if bottlenecks:
+            key_evidence.append(f"Dependency graph 顯示 {', '.join(bottlenecks[:3])} 可能是結構性匯流點。")
 
-        bottleneck_block = (
-            f"Nodes: {', '.join(bottlenecks) if bottlenecks else 'None'}\n"
-            f"Impact: {impact or 'N/A'}\n"
-            f"Suggestions: {suggestions or 'N/A'}"
-        )
-        parts.append("BOTTLENECK ANALYSIS\n" + bottleneck_block)
+    if key_evidence:
+        evidence_block = "\n".join(f"- {item}" for item in key_evidence[:5])
+        parts.append("關鍵依據\n" + evidence_block)
+
+    if next_actions:
+        action_block = "\n".join(f"- {item}" for item in next_actions[:3] if item)
+        if action_block:
+            parts.append("建議動作\n" + action_block)
+
+    limitations = [str(item) for item in [*log_limitations, *risk_limitations, *bottleneck_limitations] if item]
+    if limitations:
+        limitation_block = "\n".join(f"- {item}" for item in limitations[:4])
+        parts.append("資料限制\n" + limitation_block)
+
+    if confidence:
+        parts.append(f"信心程度\n{confidence}")
 
     return "\n\n".join(parts)

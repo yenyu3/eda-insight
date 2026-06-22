@@ -60,6 +60,13 @@ def compare():
 
 # ─── 輔助函式 ───
 
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_ppa(run: dict) -> dict:
     """從 run dict 擷取比較所需的摘要欄位。"""
     synth = run.get("synthesis_result") or {}
@@ -75,8 +82,8 @@ def _extract_ppa(run: dict) -> dict:
         "cell_count": synth.get("cell_count"),
         "wire_count": synth.get("wire_count"),
         "flip_flop_count": synth.get("flip_flop_count"),
-        "critical_path_ns": synth.get("critical_path_ns"),
-        "slack_ns": synth.get("slack_ns"),
+        "critical_path_ns": _safe_float(synth.get("critical_path_ns")),
+        "slack_ns": _safe_float(synth.get("slack_ns")),
         "synthesis": synth or None,
         "sim_result": run.get("sim_result"),
     }
@@ -92,10 +99,7 @@ def _run_sim_passed(run: dict) -> bool | None:
     """
     sim = run.get("sim_result")
 
-    if not sim:
-        return None
-
-    if not isinstance(sim, dict):
+    if not sim or not isinstance(sim, dict):
         return None
 
     # 優先使用明確欄位
@@ -109,11 +113,11 @@ def _run_sim_passed(run: dict) -> bool | None:
     if sim_status == "warning":
         return False
 
-    if "error" in sim and sim.get("error"):
+    if sim.get("error"):
         return False
 
-    # 若 schema 沒有明確欄位，盡量用 status 做保守判斷
-    status = (run.get("status") or "").lower()
+    # 若 schema 沒有明確欄位，盡量用 run status 做保守判斷
+    status = str(run.get("status") or "").lower()
     if status == "error":
         return False
     if status == "done":
@@ -132,7 +136,12 @@ def _compute_diff(a: dict, b: dict) -> dict:
             diff[key] = None
             continue
 
-        delta = vb - va
+        try:
+            delta = vb - va
+        except TypeError:
+            diff[key] = None
+            continue
+
         pct = round((delta / va) * 100, 1) if va not in (0, 0.0) else None
 
         # 對大多數指標：越小越好；但 slack 越大越好
@@ -194,13 +203,22 @@ def _recommend_version(a: dict, b: dict) -> str | None:
 
     1. simulation 明確通過者優先
     2. 若都通過，再比較 complexity（越小越好）
-    3. 若仍 tie，再比較 critical_path（越小越好）
+    3. 若仍 tie，再比較 timing：critical_path 越小越好，slack 越大越好
     """
     a_sim = a.get("sim_passed")
     b_sim = b.get("sim_passed")
 
-    if a_sim is not None and b_sim is not None and a_sim != b_sim:
-        return "a" if a_sim else "b"
+    # 明確通過優先；None 不會壓過 True
+    if a_sim is True and b_sim is not True:
+        return "a"
+    if b_sim is True and a_sim is not True:
+        return "b"
+
+    # 明確失敗則另一版優先
+    if a_sim is False and b_sim is not False:
+        return "b"
+    if b_sim is False and a_sim is not False:
+        return "a"
 
     ca = _compute_complexity(a)
     cb = _compute_complexity(b)
@@ -212,10 +230,23 @@ def _recommend_version(a: dict, b: dict) -> str | None:
     if ta is not None and tb is not None and ta != tb:
         return "a" if ta < tb else "b"
 
+    sa = a.get("slack_ns")
+    sb = b.get("slack_ns")
+    if sa is not None and sb is not None and sa != sb:
+        return "a" if sa > sb else "b"
+
     return None
 
 
 def _compute_complexity(x: dict) -> float:
+    """
+    Heuristic complexity score for relative comparison only.
+
+    - cell_count: overall structural size
+    - flip_flop_count: higher weight because state/control complexity matters more
+    - wire_count: lower weight because it scales with size but is less informative alone
+    - warning_count: modest penalty because lint warnings may indicate structural risk
+    """
     cell = x.get("cell_count") or 0
     ff = x.get("flip_flop_count") or 0
     wire = x.get("wire_count") or 0
@@ -224,21 +255,8 @@ def _compute_complexity(x: dict) -> float:
 
 
 def _compare_tradeoff(a: dict, b: dict, diff: dict, recommended: str | None) -> str:
-    """先嘗試用 AI engine 產生 tradeoff 說明，失敗時回退到簡單文字。"""
+    """先嘗試用 AI engine 產生 tradeoff 說明；真實模式失敗時不產生假分析。"""
     try:
         return get_ai_engine().compare_tradeoff(a, b, diff, recommended)
-    except Exception:
-        if recommended == "a":
-            return (
-                f"{a.get('filename', 'Version A')} is the recommended choice "
-                f"based on the available correctness and complexity metrics."
-            )
-        if recommended == "b":
-            return (
-                f"{b.get('filename', 'Version B')} is the recommended choice "
-                f"based on the available correctness and complexity metrics."
-            )
-        return (
-            "The two runs are close on the available metrics. "
-            "Review simulation results, warnings, and waveform behavior before choosing one."
-        )
+    except Exception as e:
+        return f"AI 分析無法產生：{type(e).__name__}: {e}"

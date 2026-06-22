@@ -18,6 +18,15 @@ const SECTION_TITLES: Record<string, string> = {
   IMPACT: 'Impact',
   SUGGESTIONS: 'Suggestions',
   NODES: 'Nodes',
+  '結論': '結論',
+  '關鍵依據': '關鍵依據',
+  '建議動作': '建議動作',
+  '資料限制': '資料限制',
+  '信心程度': '信心程度',
+  '可能原因': '可能原因',
+  '證據': '證據',
+  '修正建議': '修正建議',
+  '需要確認': '需要確認',
 }
 
 function cleanInline(value: string) {
@@ -91,7 +100,7 @@ function renderLines(lines: string[]) {
     const cleaned = cleanInline(line)
     if (!cleaned) return
 
-    const labelMatch = cleaned.match(/^([A-Za-z][A-Za-z ]{1,24}):\s*(.+)$/)
+    const labelMatch = cleaned.match(/^([A-Za-z][A-Za-z ]{1,24}|[\u4e00-\u9fff]{2,12}):\s*(.+)$/)
     if (labelMatch) {
       items.push(
         <p key={`row-${items.length}`} className="ai-definition">

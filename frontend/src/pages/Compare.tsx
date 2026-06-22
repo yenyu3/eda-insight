@@ -583,7 +583,7 @@ export default function Compare() {
 
           {cmp.ai_tradeoff && (
             <section className="surface-card panel">
-              <h2 className="panel-title">AI Tradeoff Analysis</h2>
+              <h2 className="panel-title">AI Tradeoff Summary</h2>
               <p className="text-sm leading-relaxed text-black/60">{cmp.ai_tradeoff}</p>
             </section>
           )}

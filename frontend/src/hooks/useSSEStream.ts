@@ -10,6 +10,7 @@ export function useSSEStream(runId: string | undefined, enabled = true) {
   const [done, setDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
+  const doneRef = useRef(false)
 
   useEffect(() => {
     if (!runId || !enabled) return
@@ -17,6 +18,7 @@ export function useSSEStream(runId: string | undefined, enabled = true) {
     setText('')
     setDone(false)
     setError(null)
+    doneRef.current = false
 
     const es = new EventSource(`/api/stream/${runId}`)
     esRef.current = es
@@ -25,19 +27,19 @@ export function useSSEStream(runId: string | undefined, enabled = true) {
       try {
         const data = JSON.parse(e.data) as SSEMessage
         if (data.type === 'text') setText((prev) => prev + (data.content ?? ''))
-        else if (data.type === 'done') { setDone(true); es.close() }
-        else if (data.type === 'error') { setError(data.content ?? 'Unknown error'); es.close() }
+        else if (data.type === 'done') { doneRef.current = true; setDone(true); es.close() }
+        else if (data.type === 'error') { doneRef.current = true; setError(data.content ?? 'Unknown error'); es.close() }
       } catch {
         // ignore malformed SSE frames
       }
     }
 
     es.onerror = () => {
-      setError('SSE connection error')
+      if (!doneRef.current) setError('SSE connection error')
       es.close()
     }
 
-    return () => { es.close() }
+    return () => { es.close(); esRef.current = null }
   }, [runId, enabled])
 
   return { text, done, error }

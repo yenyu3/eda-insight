@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { useSSEStream } from '../hooks/useSSEStream'
 import AIFormattedText from './AIFormattedText'
 import LoadingState from './LoadingState'
@@ -39,13 +38,6 @@ export default function AIInsightPanel({ runId, enabled = true }: AIInsightPanel
         />
       )}
       <AIFormattedText text={text} />
-      {!done && text && (
-        <motion.span
-          className="ml-1 inline-block h-4 w-0.5 align-middle bg-[var(--accent-color)]"
-          animate={{ opacity: [1, 0, 1] }}
-          transition={{ duration: 0.8, repeat: Infinity }}
-        />
-      )}
     </div>
   )
 }
