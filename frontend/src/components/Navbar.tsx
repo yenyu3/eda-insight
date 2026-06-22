@@ -23,9 +23,9 @@ export default function Navbar() {
     <header className={`header${scrolled ? ' scrolled' : ''}`}>
       <div className="container header-inner">
         <Link to="/" className="logo-link">
-          <span className="logo-img logo-mark">EI</span>
+          <span className="logo-img logo-mark">VI</span>
           <h1 className="sitename logo-name">
-            <span>EDA Insight</span>
+            <span>VeriFlow Insight</span>
             <span>Workflow</span>
           </h1>
         </Link>

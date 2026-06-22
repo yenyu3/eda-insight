@@ -289,7 +289,7 @@ export default function Analysis() {
 
   useEffect(() => {
     if (status?.run_id) {
-      window.localStorage.setItem('eda-insight:last-run-id', status.run_id)
+      window.localStorage.setItem('veriflow-insight:last-run-id', status.run_id)
     }
   }, [status?.run_id])
 
@@ -297,9 +297,9 @@ export default function Analysis() {
     if (
       statusError &&
       runId &&
-      window.localStorage.getItem('eda-insight:last-run-id') === runId
+      window.localStorage.getItem('veriflow-insight:last-run-id') === runId
     ) {
-      window.localStorage.removeItem('eda-insight:last-run-id')
+      window.localStorage.removeItem('veriflow-insight:last-run-id')
     }
   }, [runId, statusError])
 

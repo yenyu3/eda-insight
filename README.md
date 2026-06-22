@@ -1,71 +1,135 @@
-# EDA Insight
+# VeriFlow Insight
 
-EDA Insight 是一個面向 EDA workflow 的 AI observability 平台。使用者可以上傳 Verilog 檔案，系統會執行解析、模擬、合成與 dependency 分析，並在前端儀表板中呈現 pipeline 狀態、log、波形、module graph、PPA 指標與 AI 輔助說明。
+VeriFlow Insight 是一個以 Verilog 設計為核心的 EDA 工作流觀測與 AI 輔助分析平台。它將 Verilog 上傳、靜態解析、lint 檢查、Icarus Verilog simulation、Yosys synthesis、dependency graph、run history、版本比較與 AI 摘要整合成一個可視化系統，適合用來展示或驗證小型 RTL 設計的分析流程。
 
-此專案由兩個主要部分組成：
+## 專案概述
 
-- `backend/`: Flask API，負責檔案上傳、EDA pipeline、SQLite 紀錄與 AI 介接。
-- `frontend/`: React + Vite 前端，負責上傳流程、分析頁、歷史紀錄與比較頁。
+### 專案名稱
 
-## 功能概覽
+**VeriFlow Insight**
 
-- 上傳一個或多個 `.v` Verilog 檔案。
-- 解析 module、port、signal、lint issue 與 dependency graph。
-- 使用 Icarus Verilog 執行 simulation，並解析 VCD waveform。
-- 使用 Yosys 執行 synthesis，擷取 cell count 等合成資訊。
-- 透過 SSE 串流顯示 AI insight。
-- 保存分析紀錄，並支援兩次 run 的 PPA 比較。
+名稱由 Verilog、workflow 與 insight 組成，對應本專案的三個重點：RTL 原始碼、EDA pipeline，以及可理解的分析結果。
 
-## 環境需求
+### 系統定位
 
-請先確認本機已安裝以下工具：
+本系統定位為 **AI-assisted EDA Workflow Observability Platform**。它不是完整商用 EDA 工具，也不是單純的語法檢查器，而是一個把開源 EDA 工具與 Web UI 串起來的分析平台：
 
-- Python 3.10 或以上
-- Node.js 18 或以上
+- 對 Verilog 原始碼做 module、port、signal、logic type 與 instantiation 解析。
+- 透過 heuristic lint 找出部分可疑訊號或風格問題。
+- 使用 Icarus Verilog 編譯並執行 testbench，擷取 simulation 狀態與 VCD 統計資訊。
+- 使用 Yosys synthesis，取得 cell count、wire count、flip-flop count 與面積等級估計。
+- 建立 module dependency graph 與 flowchart，輔助理解設計結構。
+- 將每次分析保存為 run，可在 History 查詢，也可在 Compare 比較兩次分析結果。
+- 使用 AI provider 或 mock AI 產生 log insight、risk score、bottleneck analysis 與 compare tradeoff。
+
+### 價值主張
+
+VeriFlow Insight 的價值在於把分散的 EDA 指令、log、波形與合成數據整理成一個連續的觀測流程。對學生、RTL 初學者或 demo 場景來說，它可以降低理解 EDA pipeline 的門檻；對已熟悉 EDA 的使用者來說，它提供一個輕量的 run-based dashboard，用來快速比較不同 Verilog 版本的結構、simulation 狀態與 synthesis 指標。
+
+### Python 在本專案的角色
+
+Python 是本專案的後端核心，負責把 EDA 工具、資料儲存與 AI 分析串接在一起：
+
+- 使用 Flask 提供 REST API 與 Server-Sent Events。
+- 管理上傳檔案、run 目錄、SQLite 資料庫與 stage logs。
+- 呼叫 Icarus Verilog 的 `iverilog`、`vvp` 與 Yosys 的 `yosys`。
+- 解析 Verilog、VCD、Yosys JSON/report，並轉成前端可視化資料。
+- 管理 pipeline stage，包括 parse、lint、simulation、dependency、synthesis、AI report。
+- 封裝 Anthropic Claude 或 Google Gemini API，並提供 mock AI 模式讓沒有 API key 的環境也能 demo。
+
+## 功能
+
+- 多檔 `.v` 上傳：可同時上傳 design file 與 testbench。
+- Verilog 靜態解析：module、port、signal、logic type、module instantiation。
+- Lint 檢查：目前以 heuristic 方式偵測部分 unused wire/reg 類型問題。
+- Simulation：使用 Icarus Verilog 編譯所有上傳的 `.v`，再用 `vvp` 執行。
+- Waveform 統計：讀取 simulation 產生的 VCD，供前端顯示波形資訊。
+- Synthesis：使用 Yosys 讀取 design files，輸出 synthesis JSON 並解析 PPA 類指標。
+- Dependency graph 與 flowchart：呈現 RTL module 關係與控制流程摘要。
+- AI insight：產生 log 摘要、risk score、bottleneck analysis 與版本比較文字。
+- History：保存每次 run 的狀態與主要指標。
+- Compare：比較兩個 run 的 simulation、warning、cell、wire、flip-flop 等差異。
+
+## 技術架構
+
+```text
+eda-insight/
+├─ backend/
+│  ├─ app.py                         # Flask application factory 與健康檢查
+│  ├─ config.py                      # port、CORS、AI provider、pipeline 與資料路徑設定
+│  ├─ db_manager.py                  # SQLite runs 與 stage_logs 管理
+│  ├─ requirements.txt               # Python 套件
+│  ├─ routes/
+│  │  ├─ upload.py                   # upload、run、status、delete run
+│  │  ├─ analysis.py                 # result、logs
+│  │  ├─ history.py                  # history
+│  │  ├─ compare.py                  # compare
+│  │  └─ ai.py                       # SSE AI stream
+│  ├─ services/
+│  │  ├─ workflow_service.py         # pipeline orchestration
+│  │  ├─ parser_service.py           # parse 與 flowchart stage
+│  │  ├─ lint_service.py             # lint stage
+│  │  ├─ simulation_service.py       # simulation stage
+│  │  ├─ synthesis_service.py        # synthesis stage
+│  │  └─ ai_service.py               # Anthropic/Gemini/mock AI wrapper
+│  ├─ eda_tools/
+│  │  ├─ verilog_parser.py           # Verilog parser
+│  │  ├─ iverilog_runner.py          # iverilog/vvp subprocess wrapper
+│  │  ├─ yosys_runner.py             # Yosys subprocess wrapper 與 report parser
+│  │  ├─ vcd_parser.py               # VCD parser
+│  │  └─ flowchart_extractor.py      # flowchart extraction
+│  └─ utils/                         # file、log、json、graph helpers
+├─ frontend/
+│  ├─ package.json                   # React/Vite scripts 與前端依賴
+│  ├─ vite.config.ts                 # Vite dev server 與 /api proxy
+│  └─ src/
+│     ├─ App.tsx                     # routes: Upload, Analysis, History, Compare
+│     ├─ pages/                      # page views
+│     ├─ components/                 # pipeline、waveform、graph、log、AI panels
+│     ├─ hooks/                      # run status polling 與 SSE stream
+│     └─ types/                      # TypeScript shared types
+├─ sample_verilog/
+│  ├─ 01_adder_8bit/
+│  ├─ 02_counter_4bit/
+│  ├─ 03_alu_8bit_v1/
+│  ├─ 04_alu_8bit_v2/
+│  ├─ 05_traffic_light_fsm/
+│  ├─ 06_uart_tx/
+│  ├─ 07_pulse_stretcher_v1/
+│  ├─ 08_pulse_stretcher_v2/
+│  ├─ 09_broken_adder/
+│  ├─ 10_incomplete_assign/
+│  └─ 11_bad_style_mix/
+└─ README.md
+```
+
+## 執行需求
+
+### 必要環境
+
+- Python 3.10 以上
+- Node.js 18 以上
 - npm
-- Icarus Verilog: `iverilog`、`vvp`
-- Yosys
+- Icarus Verilog：需要 `iverilog` 與 `vvp`
+- Yosys：需要 `yosys`
 
-在 Windows 上建議使用 OSS CAD Suite 安裝 Icarus Verilog 與 Yosys，並確認其 `bin` 目錄已加入 `PATH`。
+Windows 使用者可以透過 OSS CAD Suite 安裝 Icarus Verilog 與 Yosys。後端也會嘗試尋找以下常見路徑：
 
-可用以下指令檢查：
+- `C:\oss-cad-suite\bin`
+- `C:\ProgramData\chocolatey\bin`
+
+確認工具是否可用：
 
 ```powershell
 python --version
 node --version
 npm --version
 iverilog -V
+vvp -V
 yosys --version
 ```
 
-## 專案結構
-
-```text
-eda-insight/
-├─ backend/
-│  ├─ app.py
-│  ├─ workflow_engine.py
-│  ├─ verilog_parser.py
-│  ├─ vcd_parser.py
-│  ├─ report_parser.py
-│  ├─ dependency_analyzer.py
-│  ├─ ai_engine.py
-│  ├─ db_manager.py
-│  └─ requirements.txt
-├─ frontend/
-│  ├─ src/
-│  ├─ package.json
-│  └─ vite.config.ts
-├─ sample_verilog/
-│  ├─ counter_4bit.v
-│  ├─ counter_tb.v
-│  └─ adder_8bit.v
-└─ README.md
-```
-
-## 安裝步驟
-
-### 1. 安裝後端套件
+## 後端設定與執行
 
 ```powershell
 cd backend
@@ -74,40 +138,18 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-### 2. 設定後端環境變數
-
-在 `backend/` 目錄下建立 `.env` 檔案：
+建立 `backend/.env`。如果只是 demo 或本機測試，可以使用 mock AI，不需要 API key：
 
 ```env
 FLASK_PORT=5050
-USE_MOCK_AI=true
+FLASK_DEBUG=1
+CORS_ORIGINS=http://localhost:5173
 USE_FIXED_PIPELINE=true
-ANTHROPIC_API_KEY=your-key-here
+USE_MOCK_AI=true
+AI_PROVIDER=anthropic
 ```
 
-說明：
-
-- `FLASK_PORT=5050`: 前端 Vite proxy 目前會把 `/api` 轉發到 `http://localhost:5050`，因此後端建議固定使用 `5050`。
-- `USE_MOCK_AI=true`: 使用 mock AI 輸出，不需要真實 API key，適合本機 demo。
-- `USE_MOCK_AI=false`: 若要使用 Anthropic API，請填入有效的 `ANTHROPIC_API_KEY`。
-- `USE_FIXED_PIPELINE=true`: 使用固定 pipeline: lint、simulate、synthesize。
-
-`.env` 不應提交到 Git。
-
-### 3. 安裝前端套件
-
-開啟另一個 PowerShell：
-
-```powershell
-cd frontend
-npm install
-```
-
-## 啟動專案
-
-請使用兩個終端機分別啟動後端與前端。
-
-### Terminal 1: 啟動 Flask 後端
+啟動後端：
 
 ```powershell
 cd backend
@@ -115,77 +157,120 @@ cd backend
 python app.py
 ```
 
-成功後會看到類似輸出：
+預設 API server：
 
 ```text
-Running on http://127.0.0.1:5050
+http://localhost:5050
 ```
 
-### Terminal 2: 啟動 Vite 前端
+健康檢查：
+
+```powershell
+curl http://localhost:5050/
+```
+
+## AI Provider 與 API Key
+
+AI 功能是可選的。沒有 API key 時，建議設定：
+
+```env
+USE_MOCK_AI=true
+```
+
+若要使用 Anthropic：
+
+```env
+USE_MOCK_AI=false
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your-anthropic-key
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+```
+
+若要使用 Gemini：
+
+```env
+USE_MOCK_AI=false
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+其他可用環境變數：
+
+```env
+MAX_TOKENS=1024
+USE_FIXED_PIPELINE=true
+```
+
+`USE_FIXED_PIPELINE=true` 會使用固定流程：`lint`、`simulate`、`synthesize`、`dependency`。若改成 `false`，後端會嘗試使用 AI planner 決定 pipeline steps，失敗時會 fallback 到固定流程。
+
+## 前端設定與執行
 
 ```powershell
 cd frontend
+npm install
 npm run dev
 ```
 
-成功後開啟：
+預設前端網址：
 
 ```text
 http://127.0.0.1:5173
 ```
 
-前端會透過 `frontend/vite.config.ts` 將 `/api` proxy 到後端 `http://localhost:5050`。
+`frontend/vite.config.ts` 會把 `/api` proxy 到：
+
+```text
+http://localhost:5050
+```
+
+因此本機開發時請同時啟動後端與前端。
 
 ## 使用流程
 
 1. 開啟 `http://127.0.0.1:5173`。
-2. 在 Upload 頁面上傳 Verilog 檔案。
-3. 可使用範例檔案：
-   - `sample_verilog/counter_4bit.v`
-   - `sample_verilog/counter_tb.v`
-4. 上傳後開始分析。
-5. 在 Analysis 頁查看 pipeline 狀態、log、波形、dependency graph、合成結果與 AI insight。
-6. 在 History 頁查看過去執行紀錄。
-7. 在 Compare 頁比較兩次 run 的 PPA 差異。
+2. 在 Upload 頁面上傳一個或多個 `.v` 檔案。
+3. 如果要看到 simulation 與 waveform，請同時上傳 design file 與 testbench。
+4. 按下 Run Analysis。
+5. 到 Analysis 頁面查看 pipeline stage、logs、waveform、synthesis metrics、dependency graph、flowchart 與 AI insight。
+6. 到 History 頁面查看過去 run。
+7. 到 Compare 頁面選擇兩個 run，比較 simulation、warning 與 synthesis 指標。
 
-## API 快速檢查
+建議從以下範例開始：
 
-後端啟動後，可用以下指令確認 API 是否正常：
+- `sample_verilog/02_counter_4bit/counter_4bit.v`
+- `sample_verilog/02_counter_4bit/counter_4bit_tb.v`
 
-```powershell
-curl http://localhost:5050/api/history
-```
+Compare demo 可使用：
 
-預期會得到 JSON：
+- `sample_verilog/07_pulse_stretcher_v1/`
+- `sample_verilog/08_pulse_stretcher_v2/`
+- `sample_verilog/03_alu_8bit_v1/`
+- `sample_verilog/04_alu_8bit_v2/`
 
-```json
-{
-  "runs": []
-}
-```
+錯誤與 lint demo 可使用：
 
-若已有執行紀錄，`runs` 會包含歷史資料。
+- `sample_verilog/09_broken_adder/`
+- `sample_verilog/10_incomplete_assign/`
+- `sample_verilog/11_bad_style_mix/`
 
-## EDA 工具檢查
+## 資料檔與產生檔案
 
-若 simulation 或 synthesis 失敗，先確認工具可以在終端機中被找到：
+本專案不需要預先準備資料庫檔。第一次啟動後端時，系統會自動建立 SQLite database 與必要資料夾。
 
-```powershell
-where iverilog
-where vvp
-where yosys
-```
+會自動產生的檔案與資料夾：
 
-也可以用範例檔案手動測試：
+- `backend/eda_platform.db`：SQLite database。
+- `backend/uploads/runs/`：每次上傳的 Verilog run 目錄。
+- `backend/logs/`：後端 log 相關輸出目錄。
+- `backend/reports/`：report 相關輸出目錄。
+- `*.vcd`：simulation waveform。
+- `*.out`：Icarus Verilog 編譯輸出。
+- `frontend/dist/`：前端 production build。
 
-```powershell
-cd sample_verilog
-iverilog -o test.out -g2012 counter_4bit.v counter_tb.v
-vvp test.out
-yosys -p "read_verilog counter_4bit.v; synth; stat"
-```
+這些檔案大多已在 `.gitignore` 中排除。
 
-## 常用指令
+## 開發與檢查指令
 
 前端 type check：
 
@@ -201,69 +286,59 @@ cd frontend
 npm run build
 ```
 
-重新安裝 Python 套件：
+後端目前沒有完整 pytest test suite，僅有部分工具測試檔。可先用以下方式檢查後端是否能啟動：
 
 ```powershell
 cd backend
 .\venv\Scripts\activate
-pip install -r requirements.txt
+python app.py
 ```
 
 ## 常見問題
 
-### 前端打不開或 API 沒有回應
+### 前端連不到後端
 
 確認兩個服務都已啟動：
 
 - Frontend: `http://127.0.0.1:5173`
 - Backend: `http://localhost:5050`
 
-並確認 `backend/.env` 有設定：
+並確認 `backend/.env` 與 `frontend/vite.config.ts` 使用相同的後端 port，預設為 `5050`。
 
-```env
-FLASK_PORT=5050
-```
+### `iverilog`、`vvp` 或 `yosys` 找不到
 
-### `ModuleNotFoundError`
-
-代表 Python 套件尚未安裝或 virtual environment 尚未啟用：
+請確認 EDA 工具已安裝，且 `bin` 目錄在 PATH 中：
 
 ```powershell
-cd backend
-.\venv\Scripts\activate
-pip install -r requirements.txt
+where iverilog
+where vvp
+where yosys
 ```
 
-### Simulation stage 失敗
+Windows 若使用 OSS CAD Suite，常見路徑是：
 
-通常是 `iverilog` 或 `vvp` 沒有安裝、沒有加入 `PATH`，或 Verilog/testbench 本身有語法錯誤。先用 `where iverilog`、`where vvp` 確認工具位置，再查看 Analysis 頁面的 log。
-
-### Synthesis stage 失敗
-
-通常是 `yosys` 沒有安裝、沒有加入 `PATH`，或 Verilog 不符合 Yosys 可合成語法。先用以下指令確認：
-
-```powershell
-yosys --version
+```text
+C:\oss-cad-suite\bin
 ```
 
-### AI insight 沒有真實模型輸出
+### Analysis 沒有 waveform
 
-若 `USE_MOCK_AI=true`，系統會使用 mock response。若要連接 Anthropic API：
+通常是以下原因：
 
-```env
-USE_MOCK_AI=false
-ANTHROPIC_API_KEY=sk-ant-...
-```
+- 沒有上傳 testbench。
+- testbench 沒有產生 `$dumpfile` 與 `$dumpvars`。
+- simulation 編譯或執行失敗。
+- testbench 沒有正確 instantiate design module。
 
-設定後重新啟動後端。
+### Synthesis 指標為 0 或 unknown
 
-## 資料與產物
+可能原因：
 
-執行過程會產生以下本機資料：
+- Yosys 沒有安裝或不在 PATH。
+- design file 有語法問題。
+- 上傳的檔案只有 testbench，沒有可 synthesis 的 design module。
+- top module 推測不符合預期。
 
-- `backend/eda_platform.db`: SQLite database。
-- `backend/uploads/`: 上傳檔案與每次 run 的中間產物。
-- `*.vcd`、`*.out`: simulation 產物。
-- `frontend/dist/`: 前端 build 產物。
+### AI insight 沒有真實模型回覆
 
-這些檔案已在 `.gitignore` 中排除，不應提交到版本控制。
+如果 `USE_MOCK_AI=true`，系統會使用 mock 回覆，這是正常行為。若要使用真實模型，請設定 `USE_MOCK_AI=false` 並提供對應 provider 的 API key。

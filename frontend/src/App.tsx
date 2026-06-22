@@ -6,7 +6,7 @@ import History from './pages/History'
 import Compare from './pages/Compare'
 
 function AnalysisRedirect() {
-  const lastRunId = window.localStorage.getItem('eda-insight:last-run-id')
+  const lastRunId = window.localStorage.getItem('veriflow-insight:last-run-id')
   return <Navigate to={lastRunId ? `/analysis/${lastRunId}` : '/history'} replace />
 }
 

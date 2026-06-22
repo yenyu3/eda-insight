@@ -59,7 +59,7 @@ def create_app() -> Flask:
     def health_check():
         """Backend 健康檢查端點，供瀏覽器或手動驗證使用。"""
         return jsonify({
-            "service": "EDA Insight Backend",
+            "service": "VeriFlow Insight Backend",
             "status": "ok",
             "api_base": "/api",
             "endpoints": [

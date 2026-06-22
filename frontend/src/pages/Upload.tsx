@@ -113,7 +113,7 @@ export default function Upload() {
       if (!res.ok) throw new Error(`Analysis failed to start with status ${res.status}`)
       pipelineStartedRef.current = true
       pendingRunIdRef.current = null
-      window.localStorage.setItem('eda-insight:last-run-id', runId)
+      window.localStorage.setItem('veriflow-insight:last-run-id', runId)
       navigate(`/analysis/${runId}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
