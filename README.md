@@ -2,6 +2,8 @@
 
 VeriFlow Insight 是一個面向 EDA 產業非開發者角色的 AI-first Workflow Observability Platform，主要服務 AE、SE、EDA PM 等需要理解設計流程與風險、但不一定直接撰寫工具腳本或閱讀大量 EDA log 的使用者。使用者只要上傳 Verilog 程式碼，系統就會自動執行完整 EDA pipeline，並透過 AI 分析結果與互動式視覺化儀表板呈現 workflow 狀態、設計風險與工程決策線索。
 
+[Live Demo](https://drive.google.com/file/d/13HH7IjGilpuVEDFrNM3KG7JgeTEpLWx1/view?usp=sharing)
+
 ### 系統定位
 
 本系統定位為 **AI-first Workflow Observability Platform for EDA**。不是完整商用 EDA 工具，也不是單純的語法檢查器，而是一個為 EDA 產業非開發者角色設計的工作流觀測平台：讓使用者不需要讀懂 EDA log 或工具指令，也能理解 workflow 狀態、掌握設計風險，並做出工程決策。
